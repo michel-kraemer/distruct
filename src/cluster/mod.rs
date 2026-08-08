@@ -1,0 +1,502 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::{Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use anyhow::{Context, Result};
+use log::{error, info, warn};
+use openraft::{
+    ChangeMembers::{AddVoterIds, RemoveNodes, RemoveVoters},
+    Raft, ServerState, StoredMembership,
+};
+use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustc_hash::FxHashSet;
+use tokio::{
+    select,
+    sync::{broadcast, oneshot},
+    task::JoinHandle,
+};
+
+use crate::{
+    connection::{
+        message::{Request, Response},
+        pool::Pool,
+    },
+    raft::{
+        NodeId, TypeConfig, heartbeat::HeartbeatMonitor, log::LogStorage, network::NetworkFactory,
+        node::Node, state::StateMachine,
+    },
+};
+
+pub const DEFAULT_PORT: u16 = 35000;
+
+pub struct ClusterConfig {
+    bind_addr: SocketAddr,
+    public_addr: SocketAddr,
+    public_server_name: String,
+    seed: Option<(SocketAddr, String)>,
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+}
+
+pub struct ClusterConfigBuilder {
+    bind_addr: SocketAddr,
+    public_addr: SocketAddr,
+    public_server_name: String,
+    seed: Option<(SocketAddr, String)>,
+}
+
+impl Default for ClusterConfigBuilder {
+    fn default() -> Self {
+        Self {
+            bind_addr: (Ipv6Addr::LOCALHOST, DEFAULT_PORT).into(),
+            public_addr: (Ipv6Addr::LOCALHOST, DEFAULT_PORT).into(),
+            public_server_name: "localhost".to_string(),
+            seed: None,
+        }
+    }
+}
+
+impl ClusterConfigBuilder {
+    pub fn with_bind_addr(mut self, addr: SocketAddr) -> Self {
+        self.bind_addr = addr;
+        self
+    }
+
+    pub fn with_public_addr(mut self, addr: SocketAddr, server_name: String) -> Self {
+        self.public_addr = addr;
+        self.public_server_name = server_name;
+        self
+    }
+
+    pub fn with_seed(mut self, addr: SocketAddr, server_name: String) -> Self {
+        self.seed = Some((addr, server_name));
+        self
+    }
+
+    pub fn build(
+        self,
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> ClusterConfig {
+        ClusterConfig {
+            bind_addr: self.bind_addr,
+            public_addr: self.public_addr,
+            public_server_name: self.public_server_name,
+            seed: self.seed,
+            certs,
+            key,
+        }
+    }
+}
+
+pub struct Cluster {
+    shutdown_tx: oneshot::Sender<()>,
+    watch_membership_handle: JoinHandle<()>,
+    detect_failures_handle: JoinHandle<()>,
+    main_loop_handle: JoinHandle<()>,
+}
+
+impl Cluster {
+    pub async fn spawn(config: ClusterConfig) -> Result<Self> {
+        // create endpoint
+        let pool = Arc::new(
+            Pool::new(config.bind_addr, config.certs, config.key)
+                .context("failed to create connection pool")?,
+        );
+
+        // run server
+        let mut server = pool.spawn_server();
+        info!("Listening on {} ...", pool.local_addr());
+
+        // generate unique server ID
+        #[cfg(not(test))]
+        let server_id = ulid::Ulid::generate();
+        #[cfg(test)]
+        let server_id = 0;
+
+        // configure Raft
+        let raft_config = Arc::new(openraft::Config {
+            heartbeat_interval: 500,
+            election_timeout_min: 1500,
+            election_timeout_max: 3000,
+            ..Default::default()
+        });
+        let heartbeat_monitor = Arc::new(HeartbeatMonitor::default());
+        let network = NetworkFactory::new(Arc::clone(&heartbeat_monitor), Arc::clone(&pool));
+        let log_storage = LogStorage::default();
+        let state_machine = StateMachine::default();
+        let raft: Arc<Raft<TypeConfig>> = Arc::new(
+            Raft::new(server_id, raft_config, network, log_storage, state_machine)
+                .await
+                .context("failed to create Raft task")?,
+        );
+
+        // configure graceful shutdown
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (shutdown_broadcast_tx, _) = broadcast::channel(1);
+        {
+            let raft = Arc::clone(&raft);
+            let shutdown_broadcast_tx = shutdown_broadcast_tx.clone();
+            let pool = Arc::clone(&pool);
+            tokio::spawn(async move {
+                if let Ok(()) = shutdown_rx.await
+                    && let Err(e) = on_graceful_shutdown(raft, shutdown_broadcast_tx, &pool).await
+                {
+                    error!("Unable to gracefully shutdown node: {e}");
+                    std::process::exit(1);
+                }
+            });
+        }
+
+        // watch for membership changes and log them
+        let watch_membership_handle = {
+            let raft = Arc::clone(&raft);
+            let heartbeat_monitor = Arc::clone(&heartbeat_monitor);
+            let mut shutdown_broadcast_rx = shutdown_broadcast_tx.subscribe();
+            tokio::spawn(async move {
+                select! {
+                    _ = shutdown_broadcast_rx.recv() => {},
+                    _ = watch_membership_changes(heartbeat_monitor, raft) => {},
+                }
+            })
+        };
+
+        // start background task to detect failures and to remove nodes when
+        // they've become unavailable
+        // TODO the failure detection strategy and what to do in case of
+        // failures is application-specific and should be configurable (see
+        // Hazelcast failure detectors)
+        let detect_failures_handle = {
+            let raft = Arc::clone(&raft);
+            let shutdown_broadcast_tx = shutdown_broadcast_tx.clone();
+            tokio::spawn(async move {
+                detect_failures(heartbeat_monitor, raft, shutdown_broadcast_tx).await;
+            })
+        };
+
+        // main message loop
+        // TODO warn about errors when sending back to client (let _ = ...)
+        let raft2 = Arc::clone(&raft);
+        let mut shutdown_broadcast_rx = shutdown_broadcast_tx.subscribe();
+        let main_loop_handle = tokio::spawn(async move {
+            loop {
+                select! {
+                    _ = shutdown_broadcast_rx.recv() => break,
+
+                    Some(message) = server.recv() => {
+                        match message {
+                            (Request::AddLearner(id, peer, blocking), reply) => {
+                                info!("Client {id} {} wants to join as learner", peer.addr());
+                                let cw = raft2.add_learner(id, peer, blocking).await;
+                                let _ = reply.send(Response::ClientWrite(cw));
+                            }
+
+                            (Request::ChangeMembership(members, retain), reply) => {
+                                info!("Client wants to change membership");
+                                let cw = raft2
+                                    .change_membership(members, retain)
+                                    .await;
+                                let _ = reply.send(Response::ClientWrite(cw));
+                            }
+
+                            (Request::Append(entries), reply) => {
+                                let response = raft2.append_entries(entries).await;
+                                let _ = reply.send(Response::Append(response));
+                            }
+
+                            (Request::Vote(rpc), reply) => {
+                                let response = raft2.vote(rpc).await;
+                                let _ = reply.send(Response::Vote(response));
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let server_node = Node::new(config.public_addr, config.public_server_name);
+        if let Some(seed) = config.seed {
+            // join cluster as learner
+            let client = pool
+                .connect(seed.0, &seed.1)
+                .await
+                .with_context(|| format!("failed to connect to node {}", seed.0))?;
+
+            // TODO if response of add_learner or change_membership tells us to
+            // forward to leader, then do so
+            client
+                .add_learner(server_id, server_node, true)
+                .await
+                .context("failed to join cluster as learner")?;
+            info!("Joined cluster as learner");
+
+            let mut nodes = BTreeSet::new();
+            nodes.insert(server_id);
+            client
+                .change_membership(AddVoterIds(nodes), true)
+                .await
+                .context("failed to upgrade to voter")?;
+            info!("Upgraded to voter");
+
+            client.close();
+        } else {
+            // initialize single-node cluster
+            let mut nodes = BTreeMap::new();
+            nodes.insert(server_id, server_node);
+            raft.initialize(nodes)
+                .await
+                .context("Unable to initialize single-node cluster")?;
+
+            // wait for the current node to become the leader
+            // TODO do we need to make the timeout configurable?
+            raft.wait(Some(Duration::from_secs(10)))
+                .state(ServerState::Leader, "state")
+                .await
+                .context("Node did not become leader within 10 seconds")?;
+            info!("Node is now leader");
+        }
+
+        Ok(Self {
+            shutdown_tx,
+            watch_membership_handle,
+            detect_failures_handle,
+            main_loop_handle,
+        })
+    }
+
+    pub async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown_tx.send(());
+        self.watch_membership_handle.await?;
+        self.detect_failures_handle.await?;
+        self.main_loop_handle.await?;
+        Ok(())
+    }
+}
+
+async fn force_shutdown(raft: Arc<Raft<TypeConfig>>, shutdown_broadcast_tx: broadcast::Sender<()>) {
+    if let Err(e) = raft.shutdown().await {
+        error!("Unable to shutdown raft: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = shutdown_broadcast_tx.send(()) {
+        error!("Unable to broadcast shutdown signal: {e}");
+        std::process::exit(1);
+    }
+}
+
+async fn on_graceful_shutdown(
+    raft: Arc<Raft<TypeConfig>>,
+    shutdown_broadcast_tx: broadcast::Sender<()>,
+    pool: &Pool,
+) -> Result<()> {
+    if raft.metrics().borrow().membership_config.nodes().count() > 1 {
+        let mut nodes = BTreeSet::new();
+        nodes.insert(raft.server_metrics().borrow().id);
+
+        if raft.server_metrics().borrow().state.is_leader() {
+            raft.change_membership(RemoveVoters(nodes), false).await?;
+        } else {
+            let leader_id = raft.metrics().borrow().current_leader;
+            let leader_node = leader_id.and_then(|leader_id| {
+                raft.metrics()
+                    .borrow()
+                    .membership_config
+                    .membership()
+                    .get_node(&leader_id)
+                    .cloned()
+            });
+            if let Some(leader_node) = leader_node {
+                let client = pool
+                    .connect(leader_node.addr(), leader_node.server_name())
+                    .await?;
+                if raft.server_metrics().borrow().state.is_learner() {
+                    client.change_membership(RemoveNodes(nodes), false).await?;
+                } else {
+                    client.change_membership(RemoveVoters(nodes), false).await?;
+                }
+            }
+        }
+    }
+
+    force_shutdown(raft, shutdown_broadcast_tx).await;
+
+    Ok(())
+}
+
+async fn watch_membership_changes(
+    heartbeat_monitor: Arc<HeartbeatMonitor>,
+    raft: Arc<Raft<TypeConfig>>,
+) {
+    let mut metrics_rx = raft.metrics();
+    let mut last_membership: Arc<StoredMembership<NodeId, Node>> =
+        Arc::clone(&metrics_rx.borrow().membership_config);
+    let mut last_msg = String::new();
+
+    while metrics_rx.changed().await.is_ok() {
+        let current = Arc::clone(&metrics_rx.borrow().membership_config);
+        if current == last_membership {
+            continue;
+        }
+
+        let leader_id = metrics_rx.borrow().current_leader;
+        let mut msg = "Membership changed:\nvoters=[".to_string();
+
+        let mut all_nodes = FxHashSet::default();
+        let mut voters = current.membership().voter_ids().peekable();
+        if voters.peek().is_none() {
+            msg.push_str("]\n");
+        } else {
+            while let Some(id) = voters.next() {
+                all_nodes.insert(id);
+                let n = current.membership().get_node(&id).unwrap();
+                msg.push_str(&format!("\n    {id} {}", n.addr()));
+                if Some(id) == leader_id {
+                    msg.push_str(" [LEADER]");
+                }
+                if voters.peek().is_some() {
+                    msg.push(',');
+                }
+            }
+            msg.push_str("\n]");
+        }
+
+        msg.push_str(", learners=[");
+
+        let mut learners = current.membership().learner_ids().peekable();
+        if learners.peek().is_none() {
+            msg.push_str("]\n");
+        } else {
+            while let Some(id) = learners.next() {
+                all_nodes.insert(id);
+                let n = current.membership().get_node(&id).unwrap();
+                msg.push_str(&format!("\n    {id} {}", n.addr()));
+                if learners.peek().is_some() {
+                    msg.push(',');
+                }
+            }
+            msg.push_str("\n]");
+        }
+
+        if msg != last_msg {
+            info!("{msg}");
+            last_msg = msg;
+        }
+
+        drop(learners);
+
+        // clean up heartbeat monitor
+        heartbeat_monitor.retain(|id| all_nodes.contains(&id));
+
+        last_membership = current;
+    }
+}
+
+async fn detect_failures(
+    heartbeat_monitor: Arc<HeartbeatMonitor>,
+    raft: Arc<Raft<TypeConfig>>,
+    shutdown_broadcast_tx: broadcast::Sender<()>,
+) {
+    let mut metrics_rx = raft.metrics();
+
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    // TODO the deadlines should be much higher and they should be configurable
+    const HEARTBEAT_DEADLINE: Duration = Duration::from_secs(10);
+    const QUORUM_DEADLINE: Duration = Duration::from_secs(20);
+
+    let mut last_quorum_reached = Instant::now();
+
+    while metrics_rx.changed().await.is_ok() {
+        interval.tick().await;
+
+        let mut voters_to_remove = BTreeSet::new();
+        let mut learners_to_remove = BTreeSet::new();
+        let mut n_voters = 0;
+        {
+            let metrics = metrics_rx.borrow();
+            if metrics.state != ServerState::Leader {
+                // only the leader should be able to remove nodes
+                continue;
+            }
+
+            let current = Arc::clone(&metrics_rx.borrow().membership_config);
+
+            for (node_id, is_voter) in current
+                .membership()
+                .voter_ids()
+                .map(|id| (id, true))
+                .chain(current.membership().learner_ids().map(|id| (id, false)))
+            {
+                if is_voter {
+                    n_voters += 1;
+                }
+
+                if node_id == metrics.id {
+                    // don't monitor ourselves
+                    continue;
+                }
+
+                if let Some(last_seen) = heartbeat_monitor.last_seen(node_id) {
+                    if last_seen.elapsed() > HEARTBEAT_DEADLINE {
+                        warn!(
+                            "Node {node_id} was unreachable for more than {} \
+                            seconds. Removing it from the cluster ...",
+                            HEARTBEAT_DEADLINE.as_secs()
+                        );
+                        if is_voter {
+                            voters_to_remove.insert(node_id);
+                        } else {
+                            learners_to_remove.insert(node_id);
+                        }
+                    }
+                } else {
+                    // this should never happen because a node can never become
+                    // a member if it's unreachable, i.e. if we can't send a
+                    // heartbeat to it
+                    warn!(
+                        "Found a node in replication state but no heartbeat \
+                        information: {node_id}"
+                    );
+                }
+            }
+        }
+
+        let available_voters = n_voters - voters_to_remove.len();
+        let required_voters_for_quorum = n_voters / 2 + 1;
+        let quorum_possible = available_voters >= required_voters_for_quorum;
+
+        if quorum_possible {
+            // only try to remove nodes if a quorum is possible - otherwise the
+            // proposal will fail anyhow
+            last_quorum_reached = Instant::now();
+
+            if !voters_to_remove.is_empty()
+                && let Err(e) = raft
+                    .change_membership(RemoveVoters(voters_to_remove), false)
+                    .await
+            {
+                error!("Unable to remove voters from cluster: {e}");
+            }
+
+            if !learners_to_remove.is_empty()
+                && let Err(e) = raft
+                    .change_membership(RemoveNodes(learners_to_remove), false)
+                    .await
+            {
+                error!("Unable to remove nodes from cluster: {e}");
+            }
+        }
+
+        if last_quorum_reached.elapsed() > QUORUM_DEADLINE {
+            error!(
+                "A quorum could not be reached for more than {} seconds. Shutting down.",
+                QUORUM_DEADLINE.as_secs()
+            );
+            force_shutdown(raft, shutdown_broadcast_tx).await;
+            return;
+        }
+    }
+}

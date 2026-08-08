@@ -1,0 +1,21 @@
+[package]
+name = "distruct"
+description = "Raft-based cluster coordination and strongly-consistent distributed data structures"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.5", features = ["derive", "wrap_help"] }
+dashmap = "6.2.1"
+log = "0.4.33"
+openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
+postcard = { version = "1.1.3", features = ["alloc"] }
+quinn = "0.11.11"
+rustc-hash = "2.1.3"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.19"
+tokio = { version = "1.53.1", features = ["macros", "net", "parking_lot", "rt-multi-thread", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ulid = { version = "3.0.0", features = ["serde"] }
