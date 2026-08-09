@@ -13,6 +13,7 @@ use openraft::{
 };
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 use tokio::{
     select,
     sync::{broadcast, oneshot},
@@ -20,13 +21,15 @@ use tokio::{
 };
 
 use crate::{
+    collections::dmap::DMap,
     connection::{
         message::{Request, Response},
         pool::Pool,
+        server::Server,
     },
     raft::{
-        NodeId, TypeConfig, heartbeat::HeartbeatMonitor, log::LogStorage, network::NetworkFactory,
-        node::Node, state::StateMachine,
+        NodeId, RaftRequest, TypeConfig, heartbeat::HeartbeatMonitor, log::LogStorage,
+        network::NetworkFactory, node::Node, state::StateMachine,
     },
 };
 
@@ -93,6 +96,9 @@ impl ClusterConfigBuilder {
 }
 
 pub struct Cluster {
+    raft: Arc<Raft<TypeConfig>>,
+    state_machine: Arc<StateMachine>,
+    pool: Arc<Pool>,
     shutdown_tx: oneshot::Sender<()>,
     watch_membership_handle: JoinHandle<()>,
     detect_failures_handle: JoinHandle<()>,
@@ -108,7 +114,7 @@ impl Cluster {
         );
 
         // run server
-        let mut server = pool.spawn_server();
+        let server = pool.spawn_server();
         info!("Listening on {} ...", pool.local_addr());
 
         // generate unique server ID
@@ -127,11 +133,17 @@ impl Cluster {
         let heartbeat_monitor = Arc::new(HeartbeatMonitor::default());
         let network = NetworkFactory::new(Arc::clone(&heartbeat_monitor), Arc::clone(&pool));
         let log_storage = LogStorage::default();
-        let state_machine = StateMachine::default();
+        let state_machine = Arc::new(StateMachine::default());
         let raft: Arc<Raft<TypeConfig>> = Arc::new(
-            Raft::new(server_id, raft_config, network, log_storage, state_machine)
-                .await
-                .context("failed to create Raft task")?,
+            Raft::new(
+                server_id,
+                raft_config,
+                network,
+                log_storage,
+                Arc::clone(&state_machine),
+            )
+            .await
+            .context("failed to create Raft task")?,
         );
 
         // configure graceful shutdown
@@ -178,44 +190,14 @@ impl Cluster {
         };
 
         // main message loop
-        // TODO warn about errors when sending back to client (let _ = ...)
-        let raft2 = Arc::clone(&raft);
-        let mut shutdown_broadcast_rx = shutdown_broadcast_tx.subscribe();
-        let main_loop_handle = tokio::spawn(async move {
-            loop {
-                select! {
-                    _ = shutdown_broadcast_rx.recv() => break,
-
-                    Some(message) = server.recv() => {
-                        match message {
-                            (Request::AddLearner(id, peer, blocking), reply) => {
-                                info!("Client {id} {} wants to join as learner", peer.addr());
-                                let cw = raft2.add_learner(id, peer, blocking).await;
-                                let _ = reply.send(Response::ClientWrite(cw));
-                            }
-
-                            (Request::ChangeMembership(members, retain), reply) => {
-                                info!("Client wants to change membership");
-                                let cw = raft2
-                                    .change_membership(members, retain)
-                                    .await;
-                                let _ = reply.send(Response::ClientWrite(cw));
-                            }
-
-                            (Request::Append(entries), reply) => {
-                                let response = raft2.append_entries(entries).await;
-                                let _ = reply.send(Response::Append(response));
-                            }
-
-                            (Request::Vote(rpc), reply) => {
-                                let response = raft2.vote(rpc).await;
-                                let _ = reply.send(Response::Vote(response));
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        let main_loop_handle = {
+            let raft = Arc::clone(&raft);
+            let state_machine = Arc::clone(&state_machine);
+            let shutdown_broadcast_rx = shutdown_broadcast_tx.subscribe();
+            tokio::spawn(async move {
+                main_loop(server, raft, state_machine, shutdown_broadcast_rx).await;
+            })
+        };
 
         let server_node = Node::new(config.public_addr, config.public_server_name);
         if let Some(seed) = config.seed {
@@ -233,10 +215,8 @@ impl Cluster {
                 .context("failed to join cluster as learner")?;
             info!("Joined cluster as learner");
 
-            let mut nodes = BTreeSet::new();
-            nodes.insert(server_id);
             client
-                .change_membership(AddVoterIds(nodes), true)
+                .change_membership(AddVoterIds(BTreeSet::from([server_id])), true)
                 .await
                 .context("failed to upgrade to voter")?;
             info!("Upgraded to voter");
@@ -244,9 +224,7 @@ impl Cluster {
             client.close();
         } else {
             // initialize single-node cluster
-            let mut nodes = BTreeMap::new();
-            nodes.insert(server_id, server_node);
-            raft.initialize(nodes)
+            raft.initialize(BTreeMap::from([(server_id, server_node)]))
                 .await
                 .context("Unable to initialize single-node cluster")?;
 
@@ -260,6 +238,9 @@ impl Cluster {
         }
 
         Ok(Self {
+            raft,
+            state_machine,
+            pool,
             shutdown_tx,
             watch_membership_handle,
             detect_failures_handle,
@@ -273,6 +254,92 @@ impl Cluster {
         self.detect_failures_handle.await?;
         self.main_loop_handle.await?;
         Ok(())
+    }
+
+    pub(crate) fn pool(&self) -> &Arc<Pool> {
+        &self.pool
+    }
+
+    pub(crate) fn state_machine(&self) -> &Arc<StateMachine> {
+        &self.state_machine
+    }
+
+    pub async fn get_map<'c, K, V, N>(&'c self, name: N) -> Result<DMap<'c, K, V>>
+    where
+        N: Into<String>,
+        K: Serialize,
+        V: Serialize + for<'a> Deserialize<'a>,
+    {
+        let metrics = self.raft.metrics();
+        let metrics = metrics.borrow();
+        let leader_id = metrics.current_leader.context("unable to find leader ID")?;
+        let leader = metrics
+            .membership_config
+            .membership()
+            .get_node(&leader_id)
+            .context("unable to find leader")?;
+        Ok(DMap::new(name, self, leader.clone()))
+    }
+}
+
+async fn main_loop(
+    mut server: Server,
+    raft: Arc<Raft<TypeConfig>>,
+    state_machine: Arc<StateMachine>,
+    mut shutdown_broadcast_rx: broadcast::Receiver<()>,
+) {
+    // TODO warn about errors when sending back to client (let _ = ...)
+    loop {
+        select! {
+            _ = shutdown_broadcast_rx.recv() => break,
+
+            Some(message) = server.recv() => {
+                match message {
+                    (Request::AddLearner(id, peer, blocking), reply) => {
+                        info!("Client {id} {} wants to join as learner", peer.addr());
+                        let cw = raft.add_learner(id, peer, blocking).await;
+                        let _ = reply.send(Response::ClientWrite(cw));
+                    }
+
+                    (Request::ChangeMembership(members, retain), reply) => {
+                        info!("Client wants to change membership");
+                        let cw = raft
+                            .change_membership(members, retain)
+                            .await;
+                        let _ = reply.send(Response::ClientWrite(cw));
+                    }
+
+                    (Request::Append(entries), reply) => {
+                        let response = raft.append_entries(entries).await;
+                        let _ = reply.send(Response::Append(response));
+                    }
+
+                    (Request::Vote(rpc), reply) => {
+                        let response = raft.vote(rpc).await;
+                        let _ = reply.send(Response::Vote(response));
+                    }
+
+                    (Request::Set(request), reply) => {
+                        let cr = RaftRequest::Set {
+                            map: request.map,
+                            key: request.key,
+                            value: request.value,
+                        };
+                        let cw = raft.client_write(cr).await;
+                        let _ = reply.send(Response::ClientWrite(cw));
+                    }
+
+                    (Request::Get(request), reply) => {
+                        let value ={
+                            let lock = state_machine
+                                .get_with_lock(&request.map, &request.key).await;
+                            lock.map(|v| v.clone())
+                        };
+                        let _ = reply.send(Response::Get(value));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -293,8 +360,7 @@ async fn on_graceful_shutdown(
     pool: &Pool,
 ) -> Result<()> {
     if raft.metrics().borrow().membership_config.nodes().count() > 1 {
-        let mut nodes = BTreeSet::new();
-        nodes.insert(raft.server_metrics().borrow().id);
+        let nodes = BTreeSet::from([raft.server_metrics().borrow().id]);
 
         if raft.server_metrics().borrow().state.is_leader() {
             raft.change_membership(RemoveVoters(nodes), false).await?;

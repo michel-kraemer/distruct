@@ -1,4 +1,7 @@
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -6,9 +9,13 @@ use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::{select, signal, sync::oneshot};
 use tracing_subscriber::EnvFilter;
 
-use crate::cluster::{Cluster, ClusterConfigBuilder, DEFAULT_PORT};
+use crate::{
+    cluster::{Cluster, ClusterConfigBuilder, DEFAULT_PORT},
+    collections::dmap::DMap,
+};
 
 mod cluster;
+mod collections;
 mod connection;
 mod raft;
 
@@ -60,10 +67,12 @@ async fn main() -> Result<()> {
         .with_public_addr(public_addr, cli.public_addr);
 
     // add seed if there is any
+    let mut has_seed = false;
     if let Some(seed_addr) = cli.seed_addr {
         let seed_port = cli.seed_port.unwrap_or(DEFAULT_PORT);
         let resolved_seed_addr = resolve(&seed_addr, seed_port).await?;
         cluster_config_builder = cluster_config_builder.with_seed(resolved_seed_addr, seed_addr);
+        has_seed = true;
     }
 
     // load server certificate and private key
@@ -78,7 +87,7 @@ async fn main() -> Result<()> {
 
     let cluster = Cluster::spawn(cluster_config).await?;
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let ctrl_c = async {
         signal::ctrl_c()
@@ -104,7 +113,32 @@ async fn main() -> Result<()> {
         }
     });
 
-    shutdown_rx.await?;
+    let map: DMap<String, String> = cluster.get_map("my_map").await?;
+    if has_seed {
+        let v = map.get_consistent("Hello").await?;
+        if let Some(v) = v {
+            println!("FOUND VALUE: {v}");
+        } else {
+            println!("INSERT NEW VALUE");
+            map.insert("Hello".to_string(), "World".to_string()).await?;
+        }
+    }
+
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        select! {
+            _ = &mut shutdown_rx => {
+                break;
+            },
+
+            _ = interval.tick() => {
+                let v = map.get("Hello").await?;
+                println!("CURRENT VALUE: {v:?}");
+            }
+        }
+    }
+
+    // shutdown_rx.await?;
 
     cluster.shutdown().await?;
 

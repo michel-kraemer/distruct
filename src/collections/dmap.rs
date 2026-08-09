@@ -1,0 +1,101 @@
+use std::{borrow::Borrow, marker::PhantomData};
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    cluster::Cluster,
+    connection::client::{GetRequest, SetRequest},
+    raft::node::Node,
+};
+
+pub struct DMap<'c, K, V> {
+    name: String,
+    cluster: &'c Cluster,
+    leader: Node,
+    _marker: PhantomData<(K, V)>,
+}
+
+impl<'c, K, V> DMap<'c, K, V>
+where
+    K: Serialize,
+    V: Serialize + for<'a> Deserialize<'a>,
+{
+    pub(crate) fn new<N>(name: N, cluster: &'c Cluster, leader: Node) -> Self
+    where
+        N: Into<String>,
+    {
+        Self {
+            name: name.into(),
+            cluster,
+            leader,
+            _marker: PhantomData,
+        }
+    }
+
+    pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
+        // TODO redirect to another node and store new leader if necessary
+        // OR: don't store leader at all but get it from cluster - in any
+        // case, we need to account for a possible redirect
+
+        let client = self
+            .cluster
+            .pool()
+            .connect(self.leader.addr(), self.leader.server_name())
+            .await?;
+        let result = client
+            .set(SetRequest {
+                map: self.name.clone(),
+                key: postcard::to_allocvec(&k)?,
+                value: postcard::to_allocvec(&v)?,
+            })
+            .await?;
+
+        Ok(result
+            .value
+            .map(|value| postcard::from_bytes(&value))
+            .transpose()?)
+    }
+
+    pub async fn get<Q>(&self, k: &Q) -> Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        let key = postcard::to_allocvec(k)?;
+        self.cluster
+            .state_machine()
+            .get_with_lock(&self.name, &key)
+            .await
+            .map(|value| Ok(postcard::from_bytes(&value)?))
+            .transpose()
+    }
+
+    pub async fn get_consistent<Q>(&self, k: &Q) -> Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        // TODO redirect to another node and store new leader if necessary
+        // OR: don't store leader at all but get it from cluster - in any
+        // case, we need to account for a possible redirect
+
+        let client = self
+            .cluster
+            .pool()
+            .connect(self.leader.addr(), self.leader.server_name())
+            .await?;
+
+        let result = client
+            .get(GetRequest {
+                map: self.name.clone(),
+                key: postcard::to_allocvec(k)?,
+            })
+            .await?;
+
+        Ok(result
+            .value
+            .map(|value| postcard::from_bytes(&value))
+            .transpose()?)
+    }
+}

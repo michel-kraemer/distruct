@@ -2,18 +2,37 @@ use std::net::SocketAddr;
 
 use openraft::{
     ChangeMembers,
-    error::{ClientWriteError, RaftError},
+    error::{ClientWriteError as ORClientWriteError, RaftError},
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, VoteRequest, VoteResponse,
     },
 };
 use quinn::{Connection, ConnectionError, Endpoint, ReadToEndError, WriteError};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     connection::message::{Request, Response},
     raft::{NodeId, TypeConfig, node::Node},
 };
+
+#[derive(Serialize, Deserialize)]
+pub struct SetRequest {
+    pub map: String,
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GetRequest {
+    pub map: String,
+    pub key: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClientResponse {
+    pub value: Option<Vec<u8>>,
+}
 
 #[derive(Error, Debug)]
 pub enum ClientConnectError {
@@ -43,9 +62,9 @@ pub enum ClientRequestError {
 }
 
 #[derive(Error, Debug)]
-pub enum ClientMembershipError {
+pub enum ClientWriteError {
     #[error("remote client write request failed")]
-    ClientWrite(#[from] RaftError<NodeId, ClientWriteError<NodeId, Node>>),
+    ClientWrite(#[from] RaftError<NodeId, ORClientWriteError<NodeId, Node>>),
 
     #[error("failed to execute request")]
     Request(#[from] ClientRequestError),
@@ -102,13 +121,13 @@ impl Client {
         id: NodeId,
         node: Node,
         blocking: bool,
-    ) -> Result<ClientWriteResponse<TypeConfig>, ClientMembershipError> {
+    ) -> Result<ClientWriteResponse<TypeConfig>, ClientWriteError> {
         let resp = self
             .request(Request::AddLearner(id, node, blocking))
             .await?;
         match resp {
             Response::ClientWrite(r) => Ok(r?),
-            _ => Err(ClientMembershipError::UnknownResponse(resp)),
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
@@ -116,13 +135,13 @@ impl Client {
         &self,
         members: ChangeMembers<NodeId, Node>,
         retain: bool,
-    ) -> Result<ClientWriteResponse<TypeConfig>, ClientMembershipError> {
+    ) -> Result<ClientWriteResponse<TypeConfig>, ClientWriteError> {
         let resp = self
             .request(Request::ChangeMembership(members, retain))
             .await?;
         match resp {
             Response::ClientWrite(r) => Ok(r?),
-            _ => Err(ClientMembershipError::UnknownResponse(resp)),
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
@@ -145,6 +164,27 @@ impl Client {
         match resp {
             Response::Vote(r) => Ok(r?),
             _ => Err(ClientRaftError::UnknownResponse(resp)),
+        }
+    }
+
+    pub async fn set(&self, request: SetRequest) -> Result<ClientResponse, ClientWriteError> {
+        let resp = self.request(Request::Set(request)).await?;
+        match resp {
+            Response::ClientWrite(r) => {
+                let r = r?;
+                Ok(ClientResponse {
+                    value: r.data.value,
+                })
+            }
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
+        }
+    }
+
+    pub async fn get(&self, request: GetRequest) -> Result<ClientResponse, ClientWriteError> {
+        let resp = self.request(Request::Get(request)).await?;
+        match resp {
+            Response::Get(value) => Ok(ClientResponse { value }),
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 

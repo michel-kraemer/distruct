@@ -12,13 +12,17 @@ pub mod node;
 pub mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ClientRequest {
-    Set { key: String, value: String },
+pub enum RaftRequest {
+    Set {
+        map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ClientResponse {
-    value: Option<String>,
+pub struct RaftResponse {
+    pub value: Option<Vec<u8>>,
 }
 
 #[cfg(not(test))]
@@ -30,8 +34,8 @@ pub type NodeId = u64;
 pub struct TypeConfig {}
 
 impl RaftTypeConfig for TypeConfig {
-    type D = ClientRequest;
-    type R = ClientResponse;
+    type D = RaftRequest;
+    type R = RaftResponse;
     type NodeId = NodeId;
     type Node = Node;
     type Entry = openraft::Entry<Self>;
@@ -42,17 +46,19 @@ impl RaftTypeConfig for TypeConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use openraft::{StorageError, testing::StoreBuilder};
 
     use crate::raft::{NodeId, TypeConfig, log::LogStorage, state::StateMachine};
 
     struct MyStoreBuilder {}
 
-    impl StoreBuilder<TypeConfig, LogStorage<TypeConfig>, StateMachine> for MyStoreBuilder {
+    impl StoreBuilder<TypeConfig, LogStorage<TypeConfig>, Arc<StateMachine>> for MyStoreBuilder {
         async fn build(
             &self,
-        ) -> Result<((), LogStorage<TypeConfig>, StateMachine), StorageError<NodeId>> {
-            Ok(((), LogStorage::default(), StateMachine::default()))
+        ) -> Result<((), LogStorage<TypeConfig>, Arc<StateMachine>), StorageError<NodeId>> {
+            Ok(((), LogStorage::default(), Arc::new(StateMachine::default())))
         }
     }
 
