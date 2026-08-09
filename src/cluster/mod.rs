@@ -124,6 +124,7 @@ impl Cluster {
         let server_id = 0;
 
         // configure Raft
+        // TODO make configurable
         let raft_config = Arc::new(openraft::Config {
             heartbeat_interval: 500,
             election_timeout_min: 1500,
@@ -519,13 +520,8 @@ async fn detect_failures(
                         }
                     }
                 } else {
-                    // this should never happen because a node can never become
-                    // a member if it's unreachable, i.e. if we can't send a
-                    // heartbeat to it
-                    warn!(
-                        "Found a node in replication state but no heartbeat \
-                        information: {node_id}"
-                    );
+                    // this can happen if we are currently in the process of
+                    // connecting to the node
                 }
             }
         }

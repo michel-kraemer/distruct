@@ -109,4 +109,8 @@ impl Pool {
 
         Ok(result)
     }
+
+    pub fn force_remove(&self, host: SocketAddr) {
+        self.connections.remove(&host);
+    }
 }

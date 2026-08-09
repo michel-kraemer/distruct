@@ -43,40 +43,56 @@ impl Network {
     async fn perform_raft_action<R, O>(
         &mut self,
         operation: O,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<R, RPCError<NodeId, Node, RaftError<NodeId>>>
     where
         O: AsyncFnOnce(Client) -> Result<R, ClientRaftError>,
     {
-        // TODO make use of `_option`
-
         let client = self
             .pool
             .connect(self.node.addr(), self.node.server_name())
             .await
             .map_err(|e| Unreachable::new(&e))?;
-        let r = operation(client).await.map_err(|e| match e {
-            ClientRaftError::Raft(re) => RPCError::from(RemoteError::new_with_node(
-                self.node_id,
-                self.node.clone(),
-                re,
-            )),
-            ClientRaftError::Request(re) => match re {
-                ClientRequestError::Connection(_)
-                | ClientRequestError::DeserializeResponse(_)
-                | ClientRequestError::SerializeRequest(_) => RPCError::from(Unreachable::new(&re)),
-                ClientRequestError::ReadToEnd(_) | ClientRequestError::Write(_) => {
-                    RPCError::from(NetworkError::new(&re))
-                }
-            },
-            ClientRaftError::UnknownResponse(_) => RPCError::from(Unreachable::new(&e)),
-        })?;
 
-        // let the heartbeat monitor know that we just had contact with the node
-        // and that the request was successful
-        self.heartbeat_monitor.on_heartbeat(self.node_id);
+        let timeout = tokio::time::timeout(option.soft_ttl(), operation(client)).await;
+        let result = match timeout {
+            Ok(result) => result,
+            Err(e) => {
+                // Connection to client has timed out. Remove it from the pool
+                // so we don't try to use it again.
+                self.pool.force_remove(self.node.addr());
+                return Err(RPCError::from(Unreachable::new(&e)));
+            }
+        };
 
-        Ok(r)
+        match result {
+            Ok(result) => {
+                // let the heartbeat monitor know that we just had contact with the node
+                // and that the request was successful
+                self.heartbeat_monitor.on_heartbeat(self.node_id);
+
+                Ok(result)
+            }
+
+            Err(e) => Err(match e {
+                ClientRaftError::Raft(re) => RPCError::from(RemoteError::new_with_node(
+                    self.node_id,
+                    self.node.clone(),
+                    re,
+                )),
+                ClientRaftError::Request(re) => match re {
+                    ClientRequestError::Connection(_)
+                    | ClientRequestError::DeserializeResponse(_)
+                    | ClientRequestError::SerializeRequest(_) => {
+                        RPCError::from(Unreachable::new(&re))
+                    }
+                    ClientRequestError::ReadToEnd(_) | ClientRequestError::Write(_) => {
+                        RPCError::from(NetworkError::new(&re))
+                    }
+                },
+                ClientRaftError::UnknownResponse(_) => RPCError::from(Unreachable::new(&e)),
+            }),
+        }
     }
 }
 
