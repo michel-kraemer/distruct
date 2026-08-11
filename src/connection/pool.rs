@@ -17,6 +17,7 @@ use crate::{
         client::{Client, ClientConnectError},
         server::Server,
     },
+    raft::{NodeId, node::Node},
 };
 
 pub struct Pool {
@@ -79,10 +80,10 @@ impl Pool {
 
     pub async fn connect(
         &self,
-        host: SocketAddr,
-        server_name: &str,
+        node: &Node,
+        node_id: Option<NodeId>,
     ) -> Result<Client, ClientConnectError> {
-        if let Some(cached) = self.connections.get(&host)
+        if let Some(cached) = self.connections.get(&node.addr())
             && cached.is_open()
         {
             // return cached connection
@@ -90,7 +91,8 @@ impl Pool {
         }
 
         // create new connection
-        let result = Client::new(host, server_name, &self.endpoint).await?;
+        let host = node.addr();
+        let result = Client::new(node, node_id, &self.endpoint).await?;
         self.connections.insert(host, result.clone());
 
         {

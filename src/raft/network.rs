@@ -50,7 +50,7 @@ impl Network {
     {
         let client = self
             .pool
-            .connect(self.node.addr(), self.node.server_name())
+            .connect(&self.node, Some(self.node_id))
             .await
             .map_err(|e| Unreachable::new(&e))?;
 
@@ -89,6 +89,7 @@ impl Network {
                     ClientRequestError::ReadToEnd(_) | ClientRequestError::Write(_) => {
                         RPCError::from(NetworkError::new(&re))
                     }
+                    ClientRequestError::Response(_) => RPCError::from(Unreachable::new(&re)),
                 },
                 ClientRaftError::UnknownResponse(_) => RPCError::from(Unreachable::new(&e)),
             }),

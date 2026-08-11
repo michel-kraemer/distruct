@@ -26,8 +26,26 @@ pub enum AddLearnerError {
     Raft(#[from] RaftError<NodeId, ClientWriteError<NodeId, Node>>),
 }
 
+#[derive(Error, Serialize, Deserialize, Debug)]
+pub enum ResponseError {
+    #[error(
+        "the message was addressed to the node with ID {target_id} but was \
+        received by the node with ID {actual_id}"
+    )]
+    InvalidNode {
+        target_id: NodeId,
+        actual_id: NodeId,
+    },
+}
+
 #[derive(Serialize, Deserialize)]
-pub enum Request {
+pub(crate) struct Request {
+    pub target_id: Option<NodeId>,
+    pub body: RequestBody,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum RequestBody {
     AddLearner(NodeId, Node, bool),
     ChangeMembership(ChangeMembers<NodeId, Node>, bool),
     Append(AppendEntriesRequest<TypeConfig>),

@@ -7,10 +7,10 @@ use tokio::sync::{
 };
 use tracing::{Instrument, info_span};
 
-use crate::connection::message::{Request, Response};
+use crate::connection::message::{Request, Response, ResponseError};
 
 pub struct Server {
-    receiver: UnboundedReceiver<(Request, oneshot::Sender<Response>)>,
+    receiver: UnboundedReceiver<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
 }
 
 impl Server {
@@ -37,14 +37,16 @@ impl Server {
         Server { receiver }
     }
 
-    pub async fn recv(&mut self) -> Option<(Request, oneshot::Sender<Response>)> {
+    pub async fn recv(
+        &mut self,
+    ) -> Option<(Request, oneshot::Sender<Result<Response, ResponseError>>)> {
         self.receiver.recv().await
     }
 }
 
 async fn handle_connection(
     conn: Incoming,
-    sender: UnboundedSender<(Request, oneshot::Sender<Response>)>,
+    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
 ) -> Result<()> {
     let connection = conn.await?;
 
@@ -88,7 +90,7 @@ async fn handle_connection(
 
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
-    sender: UnboundedSender<(Request, oneshot::Sender<Response>)>,
+    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
 ) -> Result<()> {
     let req = recv
         .read_to_end(64 * 1024) // TODO maximum message size should be configurable

@@ -6,12 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     cluster::Cluster,
     connection::client::{ClearRequest, GetRequest, InsertRequest, LenRequest},
-    raft::node::Node,
+    raft::{NodeId, node::Node},
 };
 
 pub struct DMap<'c, K, V> {
     name: String,
     cluster: &'c Cluster,
+    leader_id: NodeId,
     leader: Node,
     _marker: PhantomData<(K, V)>,
 }
@@ -21,13 +22,14 @@ where
     K: Serialize,
     V: Serialize + for<'a> Deserialize<'a>,
 {
-    pub(crate) fn new<N>(name: N, cluster: &'c Cluster, leader: Node) -> Self
+    pub(crate) fn new<N>(name: N, cluster: &'c Cluster, leader_id: NodeId, leader: Node) -> Self
     where
         N: Into<String>,
     {
         Self {
             name: name.into(),
             cluster,
+            leader_id,
             leader,
             _marker: PhantomData,
         }
@@ -41,7 +43,7 @@ where
         let client = self
             .cluster
             .pool()
-            .connect(self.leader.addr(), self.leader.server_name())
+            .connect(&self.leader, Some(self.leader_id))
             .await?;
         let result = client
             .insert(InsertRequest {
@@ -83,7 +85,7 @@ where
         let client = self
             .cluster
             .pool()
-            .connect(self.leader.addr(), self.leader.server_name())
+            .connect(&self.leader, Some(self.leader_id))
             .await?;
 
         let result = client
@@ -115,7 +117,7 @@ where
         let client = self
             .cluster
             .pool()
-            .connect(self.leader.addr(), self.leader.server_name())
+            .connect(&self.leader, Some(self.leader_id))
             .await?;
 
         let result = client
@@ -143,7 +145,7 @@ where
         let client = self
             .cluster
             .pool()
-            .connect(self.leader.addr(), self.leader.server_name())
+            .connect(&self.leader, Some(self.leader_id))
             .await?;
 
         client

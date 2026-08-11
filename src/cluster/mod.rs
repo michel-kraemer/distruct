@@ -16,7 +16,10 @@ use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use tokio::{
     select,
-    sync::{broadcast, oneshot},
+    sync::{
+        broadcast,
+        oneshot::{self, Sender},
+    },
     task::JoinHandle,
 };
 
@@ -24,7 +27,7 @@ use crate::{
     collections::dmap::DMap,
     connection::{
         client::{ClientResponse, LenResponse},
-        message::{AddLearnerError, Request, Response},
+        message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
         pool::Pool,
         server::Server,
     },
@@ -205,7 +208,7 @@ impl Cluster {
         if let Some(seed) = config.seed {
             // join cluster as learner
             let client = pool
-                .connect(seed.0, &seed.1)
+                .connect(&Node::new(seed.0, seed.1), None)
                 .await
                 .with_context(|| format!("failed to connect to node {}", seed.0))?;
 
@@ -287,7 +290,7 @@ impl Cluster {
             .membership()
             .get_node(&leader_id)
             .context("unable to find leader")?;
-        Ok(DMap::new(name, self, leader.clone()))
+        Ok(DMap::new(name, self, leader_id, leader.clone()))
     }
 }
 
@@ -297,87 +300,109 @@ async fn main_loop(
     state_machine: Arc<StateMachine>,
     mut shutdown_broadcast_rx: broadcast::Receiver<()>,
 ) {
-    // TODO warn about errors when sending back to client (let _ = ...)
     loop {
         select! {
             _ = shutdown_broadcast_rx.recv() => break,
-
-            Some(message) = server.recv() => {
-                match message {
-                    (Request::AddLearner(id, peer, blocking), reply) => {
-                        info!("Client {id} {} wants to join as learner", peer.addr());
-                        let response = if let Some(other_node) = raft
-                            .metrics()
-                            .borrow()
-                            .membership_config
-                            .nodes()
-                            .find(|(_, m)| m.addr() == peer.addr())
-                        {
-                            // a node with this socket address has already joined
-                            Err(AddLearnerError::NodeExists {
-                                addr: other_node.1.addr(),
-                                id: *other_node.0,
-                            })
-                        } else {
-                            raft.add_learner(id, peer, blocking)
-                                .await
-                                .map_err(|e| e.into())
-                        };
-                        let _ = reply.send(Response::AddLearner(response));
-                    }
-
-                    (Request::ChangeMembership(members, retain), reply) => {
-                        info!("Client wants to change membership");
-                        let cw = raft
-                            .change_membership(members, retain)
-                            .await;
-                        let _ = reply.send(Response::ClientWrite(cw));
-                    }
-
-                    (Request::Append(entries), reply) => {
-                        let response = raft.append_entries(entries).await;
-                        let _ = reply.send(Response::Append(response));
-                    }
-
-                    (Request::Vote(rpc), reply) => {
-                        let response = raft.vote(rpc).await;
-                        let _ = reply.send(Response::Vote(response));
-                    }
-
-                    (Request::Insert(request), reply) => {
-                        let cr = RaftRequest::Insert {
-                            map: request.map,
-                            key: request.key,
-                            value: request.value,
-                        };
-                        let cw = raft.client_write(cr).await;
-                        let _ = reply.send(Response::ClientWrite(cw));
-                    }
-
-                    (Request::Get(request), reply) => {
-                        let value ={
-                            let lock = state_machine
-                                .get_with_lock(&request.map, &request.key).await;
-                            lock.map(|v| v.clone())
-                        };
-                        let _ = reply.send(Response::Get(ClientResponse { value }));
-                    }
-
-                    (Request::Len(request), reply) => {
-                        let len = state_machine.map_len(&request.map).await;
-                        let _ = reply.send(Response::Len(LenResponse { len }));
-                    }
-
-                    (Request::Clear(request), reply) => {
-                        let cr = RaftRequest::Clear {
-                            map: request.map
-                        };
-                        let cw = raft.client_write(cr).await;
-                        let _ = reply.send(Response::ClientWrite(cw));
-                    }
-                }
+            Some((message, reply)) = server.recv() => {
+                handle_message(message, reply, &raft, &state_machine).await;
             }
         }
+    }
+}
+
+async fn handle_message(
+    message: Request,
+    reply: Sender<Result<Response, ResponseError>>,
+    raft: &Arc<Raft<TypeConfig>>,
+    state_machine: &Arc<StateMachine>,
+) {
+    if let Some(target_id) = message.target_id {
+        let current_id = raft.server_metrics().borrow().id;
+        if target_id != current_id {
+            error!("Reveived message for node {target_id}, but we are node {current_id}");
+            if let Err(e) = reply.send(Err(ResponseError::InvalidNode {
+                target_id,
+                actual_id: current_id,
+            })) {
+                error!("Unable to send response about invalid target ID to client: {e:?}");
+            }
+            return;
+        }
+    }
+
+    let response = match message.body {
+        RequestBody::AddLearner(id, peer, blocking) => {
+            info!("Client {id} {} wants to join as learner", peer.addr());
+            let response = if let Some(other_node) = raft
+                .metrics()
+                .borrow()
+                .membership_config
+                .nodes()
+                .find(|(_, m)| m.addr() == peer.addr())
+            {
+                // a node with this socket address has already joined
+                Err(AddLearnerError::NodeExists {
+                    addr: other_node.1.addr(),
+                    id: *other_node.0,
+                })
+            } else {
+                raft.add_learner(id, peer, blocking)
+                    .await
+                    .map_err(|e| e.into())
+            };
+            Response::AddLearner(response)
+        }
+
+        RequestBody::ChangeMembership(members, retain) => {
+            info!("Client wants to change membership");
+            let cw = raft.change_membership(members, retain).await;
+            Response::ClientWrite(cw)
+        }
+
+        RequestBody::Append(entries) => {
+            let response = raft.append_entries(entries).await;
+            Response::Append(response)
+        }
+
+        RequestBody::Vote(rpc) => {
+            let response = raft.vote(rpc).await;
+            Response::Vote(response)
+        }
+
+        RequestBody::Insert(request) => {
+            let cr = RaftRequest::Insert {
+                map: request.map,
+                key: request.key,
+                value: request.value,
+            };
+            let cw = raft.client_write(cr).await;
+            Response::ClientWrite(cw)
+        }
+
+        RequestBody::Get(request) => {
+            let value = {
+                let lock = state_machine
+                    .get_with_lock(&request.map, &request.key)
+                    .await;
+                lock.map(|v| v.clone())
+            };
+            Response::Get(ClientResponse { value })
+        }
+
+        RequestBody::Len(request) => {
+            let len = state_machine.map_len(&request.map).await;
+            Response::Len(LenResponse { len })
+        }
+
+        RequestBody::Clear(request) => {
+            let cr = RaftRequest::Clear { map: request.map };
+            let cw = raft.client_write(cr).await;
+            Response::ClientWrite(cw)
+        }
+    };
+
+    if let Err(e) = reply.send(Ok(response)) {
+        error!("Unable to send response client: {e:?}");
     }
 }
 
@@ -413,9 +438,7 @@ async fn on_graceful_shutdown(
                     .cloned()
             });
             if let Some(leader_node) = leader_node {
-                let client = pool
-                    .connect(leader_node.addr(), leader_node.server_name())
-                    .await?;
+                let client = pool.connect(&leader_node, leader_id).await?;
                 if raft.server_metrics().borrow().state.is_learner() {
                     client.change_membership(RemoveNodes(nodes), false).await?;
                 } else {
