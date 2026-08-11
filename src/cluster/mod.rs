@@ -223,6 +223,13 @@ impl Cluster {
                 .context("failed to upgrade to voter")?;
             info!("Upgraded to voter");
 
+            // wait for the current node to become a follower
+            // TODO do we need to make the timeout configurable?
+            raft.wait(Some(Duration::from_secs(10)))
+                .state(ServerState::Follower, "state")
+                .await
+                .context("Node did not become follower within 10 seconds")?;
+
             client.close();
         } else {
             // initialize single-node cluster
