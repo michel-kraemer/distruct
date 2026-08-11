@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::Cluster,
-    connection::client::{GetRequest, SetRequest},
+    connection::client::{GetRequest, InsertRequest},
     raft::node::Node,
 };
 
@@ -44,7 +44,7 @@ where
             .connect(self.leader.addr(), self.leader.server_name())
             .await?;
         let result = client
-            .set(SetRequest {
+            .insert(InsertRequest {
                 map: self.name.clone(),
                 key: postcard::to_allocvec(&k)?,
                 value: postcard::to_allocvec(&v)?,
@@ -57,7 +57,7 @@ where
             .transpose()?)
     }
 
-    pub async fn get<Q>(&self, k: &Q) -> Result<Option<V>>
+    pub async fn get_stale<Q>(&self, k: &Q) -> Result<Option<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
@@ -71,7 +71,7 @@ where
             .transpose()
     }
 
-    pub async fn get_consistent<Q>(&self, k: &Q) -> Result<Option<V>>
+    pub async fn get<Q>(&self, k: &Q) -> Result<Option<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,

@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
 
     let map: DMap<String, String> = cluster.get_map("my_map").await?;
     if has_seed {
-        let v = map.get_consistent("Hello").await?;
+        let v = map.get("Hello").await?;
         if let Some(v) = v {
             println!("FOUND VALUE: {v}");
         } else {
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
             },
 
             _ = interval.tick() => {
-                let v = map.get("Hello").await?;
+                let v = map.get_stale("Hello").await?;
                 println!("CURRENT VALUE: {v:?}");
             }
         }

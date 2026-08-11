@@ -89,7 +89,7 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachine> {
             match entry.payload {
                 EntryPayload::Blank => res.push(RaftResponse { value: None }),
                 EntryPayload::Normal(req) => match req {
-                    RaftRequest::Set { map, key, value } => {
+                    RaftRequest::Insert { map, key, value } => {
                         let m = sm.data.maps.entry(map).or_default();
                         let old = m.insert(key, value.clone());
                         res.push(RaftResponse { value: old });

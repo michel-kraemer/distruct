@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct SetRequest {
+pub struct InsertRequest {
     pub map: String,
     pub key: Vec<u8>,
     pub value: Vec<u8>,
@@ -167,8 +167,8 @@ impl Client {
         }
     }
 
-    pub async fn set(&self, request: SetRequest) -> Result<ClientResponse, ClientWriteError> {
-        let resp = self.request(Request::Set(request)).await?;
+    pub async fn insert(&self, request: InsertRequest) -> Result<ClientResponse, ClientWriteError> {
+        let resp = self.request(Request::Insert(request)).await?;
         match resp {
             Response::ClientWrite(r) => {
                 let r = r?;

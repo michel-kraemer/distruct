@@ -320,8 +320,8 @@ async fn main_loop(
                         let _ = reply.send(Response::Vote(response));
                     }
 
-                    (Request::Set(request), reply) => {
-                        let cr = RaftRequest::Set {
+                    (Request::Insert(request), reply) => {
+                        let cr = RaftRequest::Insert {
                             map: request.map,
                             key: request.key,
                             value: request.value,

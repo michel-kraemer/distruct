@@ -8,7 +8,7 @@ use openraft::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    connection::client::{GetRequest, SetRequest},
+    connection::client::{GetRequest, InsertRequest},
     raft::{NodeId, TypeConfig, node::Node},
 };
 
@@ -18,7 +18,7 @@ pub enum Request {
     ChangeMembership(ChangeMembers<NodeId, Node>, bool),
     Append(AppendEntriesRequest<TypeConfig>),
     Vote(VoteRequest<NodeId>),
-    Set(SetRequest),
+    Insert(InsertRequest),
     Get(GetRequest),
 }
 

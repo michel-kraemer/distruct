@@ -13,7 +13,7 @@ pub mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RaftRequest {
-    Set {
+    Insert {
         map: String,
         key: Vec<u8>,
         value: Vec<u8>,
