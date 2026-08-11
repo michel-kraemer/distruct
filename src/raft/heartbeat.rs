@@ -14,8 +14,8 @@ impl HeartbeatMonitor {
         self.last_seen.insert(id, Instant::now());
     }
 
-    pub fn last_seen(&self, id: NodeId) -> Option<Instant> {
-        self.last_seen.get(&id).map(|r| *r)
+    pub fn last_seen(&self, id: NodeId) -> Instant {
+        *self.last_seen.entry(id).or_insert_with(|| Instant::now())
     }
 
     pub fn retain<F>(&self, predicate: F)

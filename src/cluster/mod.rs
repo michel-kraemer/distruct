@@ -543,22 +543,18 @@ async fn detect_failures(
                     continue;
                 }
 
-                if let Some(last_seen) = heartbeat_monitor.last_seen(node_id) {
-                    if last_seen.elapsed() > HEARTBEAT_DEADLINE {
-                        warn!(
-                            "Node {node_id} was unreachable for more than {} \
+                let last_seen = heartbeat_monitor.last_seen(node_id);
+                if last_seen.elapsed() > HEARTBEAT_DEADLINE {
+                    warn!(
+                        "Node {node_id} was unreachable for more than {} \
                             seconds. Removing it from the cluster ...",
-                            HEARTBEAT_DEADLINE.as_secs()
-                        );
-                        if is_voter {
-                            voters_to_remove.insert(node_id);
-                        } else {
-                            learners_to_remove.insert(node_id);
-                        }
+                        HEARTBEAT_DEADLINE.as_secs()
+                    );
+                    if is_voter {
+                        voters_to_remove.insert(node_id);
+                    } else {
+                        learners_to_remove.insert(node_id);
                     }
-                } else {
-                    // this can happen if we are currently in the process of
-                    // connecting to the node
                 }
             }
         }
