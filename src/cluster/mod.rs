@@ -24,7 +24,7 @@ use crate::{
     collections::dmap::DMap,
     connection::{
         client::{ClientResponse, LenResponse},
-        message::{Request, Response},
+        message::{AddLearnerError, Request, Response},
         pool::Pool,
         server::Server,
     },
@@ -299,8 +299,24 @@ async fn main_loop(
                 match message {
                     (Request::AddLearner(id, peer, blocking), reply) => {
                         info!("Client {id} {} wants to join as learner", peer.addr());
-                        let cw = raft.add_learner(id, peer, blocking).await;
-                        let _ = reply.send(Response::ClientWrite(cw));
+                        let response = if let Some(other_node) = raft
+                            .metrics()
+                            .borrow()
+                            .membership_config
+                            .nodes()
+                            .find(|(_, m)| m.addr() == peer.addr())
+                        {
+                            // a node with this socket address has already joined
+                            Err(AddLearnerError::NodeExists {
+                                addr: other_node.1.addr(),
+                                id: *other_node.0,
+                            })
+                        } else {
+                            raft.add_learner(id, peer, blocking)
+                                .await
+                                .map_err(|e| e.into())
+                        };
+                        let _ = reply.send(Response::AddLearner(response));
                     }
 
                     (Request::ChangeMembership(members, retain), reply) => {

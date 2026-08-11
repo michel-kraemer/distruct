@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use openraft::{
     ChangeMembers,
     error::{ClientWriteError, RaftError},
@@ -6,6 +8,7 @@ use openraft::{
     },
 };
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     connection::client::{
@@ -13,6 +16,15 @@ use crate::{
     },
     raft::{NodeId, TypeConfig, node::Node},
 };
+
+#[derive(Error, Serialize, Deserialize, Debug)]
+pub enum AddLearnerError {
+    #[error("a node with socket address {addr} (ID: {id}) is already part of the cluster")]
+    NodeExists { addr: SocketAddr, id: NodeId },
+
+    #[error(transparent)]
+    Raft(#[from] RaftError<NodeId, ClientWriteError<NodeId, Node>>),
+}
 
 #[derive(Serialize, Deserialize)]
 pub enum Request {
@@ -28,6 +40,7 @@ pub enum Request {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
+    AddLearner(Result<ClientWriteResponse<TypeConfig>, AddLearnerError>),
     ClientWrite(
         Result<ClientWriteResponse<TypeConfig>, RaftError<NodeId, ClientWriteError<NodeId, Node>>>,
     ),

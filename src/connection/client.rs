@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    connection::message::{Request, Response},
+    connection::message::{AddLearnerError, Request, Response},
     raft::{NodeId, TypeConfig, node::Node},
 };
 
@@ -77,6 +77,18 @@ pub enum ClientRequestError {
 }
 
 #[derive(Error, Debug)]
+pub enum ClientAddLearnerError {
+    #[error("failed to add node as learner")]
+    AddLearner(#[from] AddLearnerError),
+
+    #[error("failed to execute request")]
+    Request(#[from] ClientRequestError),
+
+    #[error("unknown response")]
+    UnknownResponse(Response),
+}
+
+#[derive(Error, Debug)]
 pub enum ClientWriteError {
     #[error("remote client write request failed")]
     ClientWrite(#[from] RaftError<NodeId, ORClientWriteError<NodeId, Node>>),
@@ -136,13 +148,13 @@ impl Client {
         id: NodeId,
         node: Node,
         blocking: bool,
-    ) -> Result<ClientWriteResponse<TypeConfig>, ClientWriteError> {
+    ) -> Result<ClientWriteResponse<TypeConfig>, ClientAddLearnerError> {
         let resp = self
             .request(Request::AddLearner(id, node, blocking))
             .await?;
         match resp {
-            Response::ClientWrite(r) => Ok(r?),
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            Response::AddLearner(r) => Ok(r?),
+            _ => Err(ClientAddLearnerError::UnknownResponse(resp)),
         }
     }
 
