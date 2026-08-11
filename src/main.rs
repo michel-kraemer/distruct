@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use log::error;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::{select, signal, sync::oneshot};
 use tracing_subscriber::EnvFilter;
@@ -113,7 +114,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let map: DMap<String, String> = cluster.get_map("my_map").await?;
+    let map: DMap<String, String> = cluster.get_map("my_map");
     if has_seed {
         let v = map.get("Hello").await?;
         if let Some(v) = v {
@@ -125,6 +126,7 @@ async fn main() -> Result<()> {
     }
 
     let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut step = 0;
     loop {
         select! {
             _ = &mut shutdown_rx => {
@@ -134,6 +136,10 @@ async fn main() -> Result<()> {
             _ = interval.tick() => {
                 let v = map.get_stale("Hello").await?;
                 println!("CURRENT VALUE: {v:?} {}", map.len_stale().await);
+                step += 1;
+                if step == 10 && let Err(e) = map.insert("Hello".to_string(), "World".to_string()).await.context("failed to insert value") {
+                        error!("failed to insert value: {e:?}");
+                }
             }
         }
     }

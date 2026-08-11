@@ -1,19 +1,16 @@
 use std::{borrow::Borrow, marker::PhantomData};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::Cluster,
     connection::client::{ClearRequest, GetRequest, InsertRequest, LenRequest},
-    raft::{NodeId, node::Node},
 };
 
 pub struct DMap<'c, K, V> {
     name: String,
     cluster: &'c Cluster,
-    leader_id: NodeId,
-    leader: Node,
     _marker: PhantomData<(K, V)>,
 }
 
@@ -22,28 +19,25 @@ where
     K: Serialize,
     V: Serialize + for<'a> Deserialize<'a>,
 {
-    pub(crate) fn new<N>(name: N, cluster: &'c Cluster, leader_id: NodeId, leader: Node) -> Self
+    pub(crate) fn new<N>(name: N, cluster: &'c Cluster) -> Self
     where
         N: Into<String>,
     {
         Self {
             name: name.into(),
             cluster,
-            leader_id,
-            leader,
             _marker: PhantomData,
         }
     }
 
     pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
         // TODO redirect to another node and store new leader if necessary
-        // OR: don't store leader at all but get it from cluster - in any
-        // case, we need to account for a possible redirect
 
+        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
             .pool()
-            .connect(&self.leader, Some(self.leader_id))
+            .connect(&leader, Some(leader_id))
             .await?;
         let result = client
             .insert(InsertRequest {
@@ -79,13 +73,12 @@ where
         Q: ?Sized + Serialize,
     {
         // TODO redirect to another node and store new leader if necessary
-        // OR: don't store leader at all but get it from cluster - in any
-        // case, we need to account for a possible redirect
 
+        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
             .pool()
-            .connect(&self.leader, Some(self.leader_id))
+            .connect(&leader, Some(leader_id))
             .await?;
 
         let result = client
@@ -111,13 +104,12 @@ where
 
     pub async fn len(&self) -> Result<usize> {
         // TODO redirect to another node and store new leader if necessary
-        // OR: don't store leader at all but get it from cluster - in any
-        // case, we need to account for a possible redirect
 
+        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
             .pool()
-            .connect(&self.leader, Some(self.leader_id))
+            .connect(&leader, Some(leader_id))
             .await?;
 
         let result = client
@@ -139,13 +131,12 @@ where
 
     pub async fn clear(&self) -> Result<()> {
         // TODO redirect to another node and store new leader if necessary
-        // OR: don't store leader at all but get it from cluster - in any
-        // case, we need to account for a possible redirect
 
+        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
             .pool()
-            .connect(&self.leader, Some(self.leader_id))
+            .connect(&leader, Some(leader_id))
             .await?;
 
         client

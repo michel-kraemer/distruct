@@ -276,21 +276,25 @@ impl Cluster {
         &self.state_machine
     }
 
-    pub async fn get_map<'c, K, V, N>(&'c self, name: N) -> Result<DMap<'c, K, V>>
+    pub fn get_map<'c, K, V, N>(&'c self, name: N) -> DMap<'c, K, V>
     where
         N: Into<String>,
         K: Serialize,
         V: Serialize + for<'a> Deserialize<'a>,
     {
+        DMap::new(name, self)
+    }
+
+    pub fn get_leader(&self) -> Option<(NodeId, Node)> {
         let metrics = self.raft.metrics();
         let metrics = metrics.borrow();
-        let leader_id = metrics.current_leader.context("unable to find leader ID")?;
-        let leader = metrics
-            .membership_config
-            .membership()
-            .get_node(&leader_id)
-            .context("unable to find leader")?;
-        Ok(DMap::new(name, self, leader_id, leader.clone()))
+        if let Some(leader_id) = metrics.current_leader
+            && let Some(leader) = metrics.membership_config.membership().get_node(&leader_id)
+        {
+            Some((leader_id, leader.clone()))
+        } else {
+            None
+        }
     }
 }
 
