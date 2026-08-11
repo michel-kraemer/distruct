@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
     if has_seed {
         let v = map.get("Hello").await?;
         if let Some(v) = v {
-            println!("FOUND VALUE: {v}");
+            println!("FOUND VALUE: {v} {}", map.len().await?);
         } else {
             println!("INSERT NEW VALUE");
             map.insert("Hello".to_string(), "World".to_string()).await?;
@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
 
             _ = interval.tick() => {
                 let v = map.get_stale("Hello").await?;
-                println!("CURRENT VALUE: {v:?}");
+                println!("CURRENT VALUE: {v:?} {}", map.len_stale().await);
             }
         }
     }

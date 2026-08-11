@@ -61,6 +61,16 @@ impl StateMachine {
         let sm = self.state_machine.read().await;
         RwLockReadGuard::try_map(sm, |sm| sm.data.maps.get(map).and_then(|m| m.get(key))).ok()
     }
+
+    pub async fn map_len(&self, map: &str) -> Option<usize> {
+        self.state_machine
+            .read()
+            .await
+            .data
+            .maps
+            .get(map)
+            .map(|m| m.len())
+    }
 }
 
 impl RaftStateMachine<TypeConfig> for Arc<StateMachine> {
@@ -93,6 +103,11 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachine> {
                         let m = sm.data.maps.entry(map).or_default();
                         let old = m.insert(key, value.clone());
                         res.push(RaftResponse { value: old });
+                    }
+                    RaftRequest::Clear { map } => {
+                        let m = sm.data.maps.entry(map).or_default();
+                        m.clear();
+                        res.push(RaftResponse { value: None });
                     }
                 },
                 EntryPayload::Membership(mem) => {

@@ -23,6 +23,7 @@ use tokio::{
 use crate::{
     collections::dmap::DMap,
     connection::{
+        client::{ClientResponse, LenResponse},
         message::{Request, Response},
         pool::Pool,
         server::Server,
@@ -336,7 +337,20 @@ async fn main_loop(
                                 .get_with_lock(&request.map, &request.key).await;
                             lock.map(|v| v.clone())
                         };
-                        let _ = reply.send(Response::Get(value));
+                        let _ = reply.send(Response::Get(ClientResponse { value }));
+                    }
+
+                    (Request::Len(request), reply) => {
+                        let len = state_machine.map_len(&request.map).await;
+                        let _ = reply.send(Response::Len(LenResponse { len }));
+                    }
+
+                    (Request::Clear(request), reply) => {
+                        let cr = RaftRequest::Clear {
+                            map: request.map
+                        };
+                        let cw = raft.client_write(cr).await;
+                        let _ = reply.send(Response::ClientWrite(cw));
                     }
                 }
             }

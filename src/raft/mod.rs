@@ -18,6 +18,9 @@ pub enum RaftRequest {
         key: Vec<u8>,
         value: Vec<u8>,
     },
+    Clear {
+        map: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

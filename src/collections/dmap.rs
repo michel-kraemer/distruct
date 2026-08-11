@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cluster::Cluster,
-    connection::client::{GetRequest, InsertRequest},
+    connection::client::{ClearRequest, GetRequest, InsertRequest, LenRequest},
     raft::node::Node,
 };
 
@@ -97,5 +97,61 @@ where
             .value
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
+    }
+
+    pub async fn len_stale(&self) -> usize {
+        self.cluster
+            .state_machine()
+            .map_len(&self.name)
+            .await
+            .unwrap_or_default()
+    }
+
+    pub async fn len(&self) -> Result<usize> {
+        // TODO redirect to another node and store new leader if necessary
+        // OR: don't store leader at all but get it from cluster - in any
+        // case, we need to account for a possible redirect
+
+        let client = self
+            .cluster
+            .pool()
+            .connect(self.leader.addr(), self.leader.server_name())
+            .await?;
+
+        let result = client
+            .len(LenRequest {
+                map: self.name.clone(),
+            })
+            .await?;
+
+        Ok(result.len.unwrap_or_default())
+    }
+
+    pub async fn is_empty_stale(&self) -> bool {
+        self.len_stale().await == 0
+    }
+
+    pub async fn is_empty(&self) -> Result<bool> {
+        Ok(self.len().await? == 0)
+    }
+
+    pub async fn clear(&self) -> Result<()> {
+        // TODO redirect to another node and store new leader if necessary
+        // OR: don't store leader at all but get it from cluster - in any
+        // case, we need to account for a possible redirect
+
+        let client = self
+            .cluster
+            .pool()
+            .connect(self.leader.addr(), self.leader.server_name())
+            .await?;
+
+        client
+            .clear(ClearRequest {
+                map: self.name.clone(),
+            })
+            .await?;
+
+        Ok(())
     }
 }

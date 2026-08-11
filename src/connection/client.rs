@@ -29,9 +29,24 @@ pub struct GetRequest {
     pub key: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct LenRequest {
+    pub map: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ClearRequest {
+    pub map: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientResponse {
     pub value: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LenResponse {
+    pub len: Option<usize>,
 }
 
 #[derive(Error, Debug)]
@@ -183,7 +198,23 @@ impl Client {
     pub async fn get(&self, request: GetRequest) -> Result<ClientResponse, ClientWriteError> {
         let resp = self.request(Request::Get(request)).await?;
         match resp {
-            Response::Get(value) => Ok(ClientResponse { value }),
+            Response::Get(response) => Ok(response),
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
+        }
+    }
+
+    pub async fn len(&self, request: LenRequest) -> Result<LenResponse, ClientWriteError> {
+        let resp = self.request(Request::Len(request)).await?;
+        match resp {
+            Response::Len(response) => Ok(response),
+            _ => Err(ClientWriteError::UnknownResponse(resp)),
+        }
+    }
+
+    pub async fn clear(&self, request: ClearRequest) -> Result<(), ClientWriteError> {
+        let resp = self.request(Request::Clear(request)).await?;
+        match resp {
+            Response::Clear => Ok(()),
             _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }

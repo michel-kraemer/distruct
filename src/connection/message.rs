@@ -8,7 +8,9 @@ use openraft::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    connection::client::{GetRequest, InsertRequest},
+    connection::client::{
+        ClearRequest, ClientResponse, GetRequest, InsertRequest, LenRequest, LenResponse,
+    },
     raft::{NodeId, TypeConfig, node::Node},
 };
 
@@ -20,6 +22,8 @@ pub enum Request {
     Vote(VoteRequest<NodeId>),
     Insert(InsertRequest),
     Get(GetRequest),
+    Len(LenRequest),
+    Clear(ClearRequest),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -29,5 +33,7 @@ pub enum Response {
     ),
     Append(Result<AppendEntriesResponse<NodeId>, RaftError<NodeId>>),
     Vote(Result<VoteResponse<NodeId>, RaftError<NodeId>>),
-    Get(Option<Vec<u8>>),
+    Get(ClientResponse),
+    Len(LenResponse),
+    Clear,
 }
