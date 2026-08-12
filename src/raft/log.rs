@@ -11,7 +11,7 @@ use openraft::{
 use tokio::sync::RwLock;
 
 #[derive(Clone, Default)]
-pub struct LogStorage<C: RaftTypeConfig>(Arc<RwLock<LogStorageInner<C>>>);
+pub(crate) struct LogStorage<C: RaftTypeConfig>(Arc<RwLock<LogStorageInner<C>>>);
 
 struct LogStorageInner<C: RaftTypeConfig> {
     /// The last purged log id

@@ -9,12 +9,12 @@ use tracing::{Instrument, info_span};
 
 use crate::connection::message::{Request, Response, ResponseError};
 
-pub struct Server {
+pub(crate) struct Server {
     receiver: UnboundedReceiver<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
 }
 
 impl Server {
-    pub fn new(endpoint: Endpoint) -> Self {
+    pub(super) fn new(endpoint: Endpoint) -> Self {
         let (sender, receiver) = unbounded_channel();
 
         tokio::spawn(async move {
@@ -37,7 +37,7 @@ impl Server {
         Server { receiver }
     }
 
-    pub async fn recv(
+    pub(crate) async fn recv(
         &mut self,
     ) -> Option<(Request, oneshot::Sender<Result<Response, ResponseError>>)> {
         self.receiver.recv().await

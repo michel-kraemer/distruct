@@ -18,7 +18,7 @@ use crate::{
     raft::{NodeId, TypeConfig, heartbeat::HeartbeatMonitor, node::Node},
 };
 
-pub struct Network {
+pub(crate) struct Network {
     node_id: NodeId,
     node: Node,
     heartbeat_monitor: Arc<HeartbeatMonitor>,
@@ -128,13 +128,13 @@ impl RaftNetwork<TypeConfig> for Network {
     }
 }
 
-pub struct NetworkFactory {
+pub(crate) struct NetworkFactory {
     heartbeat_monitor: Arc<HeartbeatMonitor>,
     pool: Arc<Pool>,
 }
 
 impl NetworkFactory {
-    pub fn new(heartbeat_monitor: Arc<HeartbeatMonitor>, pool: Arc<Pool>) -> Self {
+    pub(crate) fn new(heartbeat_monitor: Arc<HeartbeatMonitor>, pool: Arc<Pool>) -> Self {
         Self {
             heartbeat_monitor,
             pool,

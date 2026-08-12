@@ -5,29 +5,33 @@ use dashmap::DashMap;
 use quinn::{
     ClientConfig, Endpoint, ServerConfig,
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
-    rustls::{
-        self, RootCertStore,
-        pki_types::{CertificateDer, PrivateKeyDer},
-    },
+};
+
+use crate::rustls::{
+    self, RootCertStore,
+    pki_types::{CertificateDer, PrivateKeyDer},
 };
 
 use crate::{
-    ALPN_QUIC_CLUSTER,
     connection::{
         client::{Client, ClientConnectError},
         server::Server,
     },
-    raft::{NodeId, node::Node},
+    raft::node::{Node, NodeId},
 };
 
-pub struct Pool {
+const ALPN_QUIC_CLUSTER: &[u8] = b"cluster";
+
+pub(crate) struct Pool {
     endpoint: Endpoint,
     local_addr: SocketAddr,
     connections: Arc<DashMap<SocketAddr, Client>>,
 }
 
+// TODO rename to ConnectionCache
+// TODO in terms of design, it's strange that we are creating the server here (not sure if Pool or ConnectionCache are the right names)
 impl Pool {
-    pub fn new(
+    pub(crate) fn new(
         addr: SocketAddr,
         certs: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
@@ -70,15 +74,15 @@ impl Pool {
         })
     }
 
-    pub fn local_addr(&self) -> SocketAddr {
+    pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
-    pub fn spawn_server(&self) -> Server {
+    pub(crate) fn spawn_server(&self) -> Server {
         Server::new(self.endpoint.clone())
     }
 
-    pub async fn connect(
+    pub(crate) async fn connect(
         &self,
         node: &Node,
         node_id: Option<NodeId>,
@@ -112,7 +116,7 @@ impl Pool {
         Ok(result)
     }
 
-    pub fn force_remove(&self, host: SocketAddr) {
+    pub(crate) fn force_remove(&self, host: SocketAddr) {
         self.connections.remove(&host);
     }
 }

@@ -21,11 +21,11 @@ type Node = <TypeConfig as RaftTypeConfig>::Node;
 type Entry = <TypeConfig as RaftTypeConfig>::Entry;
 type SnapshotData = <TypeConfig as RaftTypeConfig>::SnapshotData;
 
-pub struct StoredSnapshot {
-    pub meta: SnapshotMeta<NodeId, Node>,
+struct StoredSnapshot {
+    meta: SnapshotMeta<NodeId, Node>,
 
     /// The data of the state machine at the time of this snapshot.
-    pub data: Vec<u8>,
+    data: Vec<u8>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ struct StateMachineInner {
 }
 
 #[derive(Default)]
-pub struct StateMachine {
+pub(crate) struct StateMachine {
     /// The Raft state machine.
     state_machine: RwLock<StateMachineInner>,
 
@@ -53,7 +53,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-    pub async fn get_with_lock(
+    pub(crate) async fn get_with_lock(
         &self,
         map: &str,
         key: &[u8],
@@ -62,7 +62,7 @@ impl StateMachine {
         RwLockReadGuard::try_map(sm, |sm| sm.data.maps.get(map).and_then(|m| m.get(key))).ok()
     }
 
-    pub async fn map_len(&self, map: &str) -> Option<usize> {
+    pub(crate) async fn map_len(&self, map: &str) -> Option<usize> {
         self.state_machine
             .read()
             .await

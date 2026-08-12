@@ -1,0 +1,14 @@
+[package]
+name = "simple-app"
+description = "Raft-based cluster coordination and strongly-consistent distributed data structures"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.5", features = ["derive", "wrap_help"] }
+distruct = { path = "../.." }
+log = "0.4.33"
+tokio = { version = "1.53.1", features = ["macros", "net", "parking_lot", "rt-multi-thread", "signal"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

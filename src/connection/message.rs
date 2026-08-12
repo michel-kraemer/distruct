@@ -10,15 +10,14 @@ use openraft::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    connection::client::{
-        ClearRequest, ClientResponse, GetRequest, InsertRequest, LenRequest, LenResponse,
-    },
-    raft::{NodeId, TypeConfig, node::Node},
+use crate::raft::{
+    TypeConfig,
+    node::{Node, NodeId},
 };
 
 #[derive(Error, Serialize, Deserialize, Debug)]
-pub enum AddLearnerError {
+#[allow(clippy::large_enum_variant, reason = "RaftError allows this lint too")]
+pub(crate) enum AddLearnerError {
     #[error("a node with socket address {addr} (ID: {id}) is already part of the cluster")]
     NodeExists { addr: SocketAddr, id: NodeId },
 
@@ -27,7 +26,7 @@ pub enum AddLearnerError {
 }
 
 #[derive(Error, Serialize, Deserialize, Debug)]
-pub enum ResponseError {
+pub(crate) enum ResponseError {
     #[error(
         "the message was addressed to the node with ID {target_id} but was \
         received by the node with ID {actual_id}"
@@ -40,31 +39,42 @@ pub enum ResponseError {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Request {
-    pub target_id: Option<NodeId>,
-    pub body: RequestBody,
+    pub(crate) target_id: Option<NodeId>,
+    pub(crate) body: RequestBody,
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum RequestBody {
+pub(crate) enum RequestBody {
     AddLearner(NodeId, Node, bool),
     ChangeMembership(ChangeMembers<NodeId, Node>, bool),
     Append(AppendEntriesRequest<TypeConfig>),
     Vote(VoteRequest<NodeId>),
-    Insert(InsertRequest),
-    Get(GetRequest),
-    Len(LenRequest),
-    Clear(ClearRequest),
+    Insert {
+        map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    Get {
+        map: String,
+        key: Vec<u8>,
+    },
+    Len {
+        map: String,
+    },
+    Clear {
+        map: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum Response {
+pub(crate) enum Response {
     AddLearner(Result<ClientWriteResponse<TypeConfig>, AddLearnerError>),
     ClientWrite(
         Result<ClientWriteResponse<TypeConfig>, RaftError<NodeId, ClientWriteError<NodeId, Node>>>,
     ),
     Append(Result<AppendEntriesResponse<NodeId>, RaftError<NodeId>>),
     Vote(Result<VoteResponse<NodeId>, RaftError<NodeId>>),
-    Get(ClientResponse),
-    Len(LenResponse),
+    Get(Option<Vec<u8>>),
+    Len(Option<usize>),
     Clear,
 }

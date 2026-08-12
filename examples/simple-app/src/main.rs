@@ -5,29 +5,20 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use distruct::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use distruct::{Cluster, ClusterConfigBuilder, collections::dmap::DMap};
 use log::error;
-use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::{select, signal, sync::oneshot};
 use tracing_subscriber::EnvFilter;
 
-use crate::{
-    cluster::{Cluster, ClusterConfigBuilder, DEFAULT_PORT},
-    collections::dmap::DMap,
-};
-
-mod cluster;
-mod collections;
-mod connection;
-mod raft;
-
-const ALPN_QUIC_CLUSTER: &[u8] = b"cluster";
+const DEFAULT_PORT: u16 = 35000;
 
 #[derive(Parser)]
 struct Cli {
     #[arg(long)]
     bind_addr: IpAddr,
 
-    #[arg(long)]
+    #[arg(long, default_value_t = DEFAULT_PORT)]
     bind_port: u16,
 
     #[arg(long)]

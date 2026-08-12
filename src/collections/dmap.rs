@@ -3,10 +3,7 @@ use std::{borrow::Borrow, marker::PhantomData};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    cluster::Cluster,
-    connection::client::{ClearRequest, GetRequest, InsertRequest, LenRequest},
-};
+use crate::cluster::Cluster;
 
 pub struct DMap<'c, K, V> {
     name: String,
@@ -40,15 +37,14 @@ where
             .connect(&leader, Some(leader_id))
             .await?;
         let result = client
-            .insert(InsertRequest {
-                map: self.name.clone(),
-                key: postcard::to_allocvec(&k)?,
-                value: postcard::to_allocvec(&v)?,
-            })
+            .insert(
+                &self.name,
+                postcard::to_allocvec(&k)?,
+                postcard::to_allocvec(&v)?,
+            )
             .await?;
 
         Ok(result
-            .value
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
     }
@@ -81,15 +77,9 @@ where
             .connect(&leader, Some(leader_id))
             .await?;
 
-        let result = client
-            .get(GetRequest {
-                map: self.name.clone(),
-                key: postcard::to_allocvec(k)?,
-            })
-            .await?;
+        let result = client.get(&self.name, postcard::to_allocvec(k)?).await?;
 
         Ok(result
-            .value
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
     }
@@ -112,13 +102,9 @@ where
             .connect(&leader, Some(leader_id))
             .await?;
 
-        let result = client
-            .len(LenRequest {
-                map: self.name.clone(),
-            })
-            .await?;
+        let result = client.len(&self.name).await?;
 
-        Ok(result.len.unwrap_or_default())
+        Ok(result.unwrap_or_default())
     }
 
     pub async fn is_empty_stale(&self) -> bool {
@@ -139,11 +125,7 @@ where
             .connect(&leader, Some(leader_id))
             .await?;
 
-        client
-            .clear(ClearRequest {
-                map: self.name.clone(),
-            })
-            .await?;
+        client.clear(&self.name).await?;
 
         Ok(())
     }

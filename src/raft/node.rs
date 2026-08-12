@@ -2,22 +2,27 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(test))]
+pub(crate) type NodeId = ulid::Ulid;
+#[cfg(test)]
+pub(crate) type NodeId = u64;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Node {
+pub(crate) struct Node {
     addr: SocketAddr,
     server_name: String,
 }
 
 impl Node {
-    pub fn new(addr: SocketAddr, server_name: String) -> Self {
+    pub(crate) fn new(addr: SocketAddr, server_name: String) -> Self {
         Self { addr, server_name }
     }
 
-    pub fn addr(&self) -> SocketAddr {
+    pub(crate) fn addr(&self) -> SocketAddr {
         self.addr
     }
 
-    pub fn server_name(&self) -> &str {
+    pub(crate) fn server_name(&self) -> &str {
         &self.server_name
     }
 }

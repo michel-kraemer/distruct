@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     net::{Ipv6Addr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
@@ -11,8 +11,6 @@ use openraft::{
     ChangeMembers::{AddVoterIds, RemoveNodes, RemoveVoters},
     Raft, ServerState, StoredMembership,
 };
-use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use tokio::{
     select,
@@ -26,22 +24,24 @@ use tokio::{
 use crate::{
     collections::dmap::DMap,
     connection::{
-        client::{ClientResponse, LenResponse},
         message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
         pool::Pool,
         server::Server,
     },
     raft::{
-        NodeId, RaftRequest, TypeConfig, heartbeat::HeartbeatMonitor, log::LogStorage,
-        network::NetworkFactory, node::Node, state::StateMachine,
+        RaftRequest, TypeConfig,
+        heartbeat::HeartbeatMonitor,
+        log::LogStorage,
+        network::NetworkFactory,
+        node::{Node, NodeId},
+        state::StateMachine,
     },
+    rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
-
-pub const DEFAULT_PORT: u16 = 35000;
 
 pub struct ClusterConfig {
     bind_addr: SocketAddr,
-    public_addr: SocketAddr,
+    public_addr: Option<SocketAddr>,
     public_server_name: String,
     seed: Option<(SocketAddr, String)>,
     certs: Vec<CertificateDer<'static>>,
@@ -50,7 +50,7 @@ pub struct ClusterConfig {
 
 pub struct ClusterConfigBuilder {
     bind_addr: SocketAddr,
-    public_addr: SocketAddr,
+    public_addr: Option<SocketAddr>,
     public_server_name: String,
     seed: Option<(SocketAddr, String)>,
 }
@@ -58,9 +58,9 @@ pub struct ClusterConfigBuilder {
 impl Default for ClusterConfigBuilder {
     fn default() -> Self {
         Self {
-            bind_addr: (Ipv6Addr::LOCALHOST, DEFAULT_PORT).into(),
-            public_addr: (Ipv6Addr::LOCALHOST, DEFAULT_PORT).into(),
-            public_server_name: "localhost".to_string(),
+            bind_addr: (Ipv6Addr::LOCALHOST, 0).into(),
+            public_addr: None,
+            public_server_name: "::1".to_string(),
             seed: None,
         }
     }
@@ -73,7 +73,7 @@ impl ClusterConfigBuilder {
     }
 
     pub fn with_public_addr(mut self, addr: SocketAddr, server_name: String) -> Self {
-        self.public_addr = addr;
+        self.public_addr = Some(addr);
         self.public_server_name = server_name;
         self
     }
@@ -204,7 +204,8 @@ impl Cluster {
             })
         };
 
-        let server_node = Node::new(config.public_addr, config.public_server_name);
+        let public_addr = config.public_addr.unwrap_or(pool.local_addr());
+        let server_node = Node::new(public_addr, config.public_server_name);
         if let Some(seed) = config.seed {
             // join cluster as learner
             let client = pool
@@ -285,7 +286,7 @@ impl Cluster {
         DMap::new(name, self)
     }
 
-    pub fn get_leader(&self) -> Option<(NodeId, Node)> {
+    pub(crate) fn get_leader(&self) -> Option<(NodeId, Node)> {
         let metrics = self.raft.metrics();
         let metrics = metrics.borrow();
         if let Some(leader_id) = metrics.current_leader
@@ -373,33 +374,27 @@ async fn handle_message(
             Response::Vote(response)
         }
 
-        RequestBody::Insert(request) => {
-            let cr = RaftRequest::Insert {
-                map: request.map,
-                key: request.key,
-                value: request.value,
-            };
+        RequestBody::Insert { map, key, value } => {
+            let cr = RaftRequest::Insert { map, key, value };
             let cw = raft.client_write(cr).await;
             Response::ClientWrite(cw)
         }
 
-        RequestBody::Get(request) => {
-            let value = {
-                let lock = state_machine
-                    .get_with_lock(&request.map, &request.key)
-                    .await;
-                lock.map(|v| v.clone())
-            };
-            Response::Get(ClientResponse { value })
+        RequestBody::Get { map, key } => {
+            let value = state_machine
+                .get_with_lock(&map, &key)
+                .await
+                .map(|v| v.clone());
+            Response::Get(value)
         }
 
-        RequestBody::Len(request) => {
-            let len = state_machine.map_len(&request.map).await;
-            Response::Len(LenResponse { len })
+        RequestBody::Len { map } => {
+            let len = state_machine.map_len(&map).await;
+            Response::Len(len)
         }
 
-        RequestBody::Clear(request) => {
-            let cr = RaftRequest::Clear { map: request.map };
+        RequestBody::Clear { map } => {
+            let cr = RaftRequest::Clear { map };
             let cw = raft.client_write(cr).await;
             Response::ClientWrite(cw)
         }
@@ -475,7 +470,7 @@ async fn watch_membership_changes(
         let leader_id = metrics_rx.borrow().current_leader;
         let mut msg = "Membership changed:\nvoters=[".to_string();
 
-        let mut all_nodes = FxHashSet::default();
+        let mut all_nodes = HashSet::new();
         let mut voters = current.membership().voter_ids().peekable();
         if voters.peek().is_none() {
             msg.push_str("]\n");

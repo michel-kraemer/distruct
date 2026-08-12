@@ -6,49 +6,18 @@ use openraft::{
     },
 };
 use quinn::{Connection, ConnectionError, Endpoint, ReadToEndError, WriteError};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     connection::message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
-    raft::{NodeId, TypeConfig, node::Node},
+    raft::{
+        TypeConfig,
+        node::{Node, NodeId},
+    },
 };
 
-#[derive(Serialize, Deserialize)]
-pub struct InsertRequest {
-    pub map: String,
-    pub key: Vec<u8>,
-    pub value: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct GetRequest {
-    pub map: String,
-    pub key: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LenRequest {
-    pub map: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ClearRequest {
-    pub map: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClientResponse {
-    pub value: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LenResponse {
-    pub len: Option<usize>,
-}
-
 #[derive(Error, Debug)]
-pub enum ClientConnectError {
+pub(crate) enum ClientConnectError {
     #[error("failed to connect")]
     Connect(#[from] quinn::ConnectError),
 
@@ -57,7 +26,7 @@ pub enum ClientConnectError {
 }
 
 #[derive(Error, Debug)]
-pub enum ClientRequestError {
+pub(crate) enum ClientRequestError {
     #[error("failed to open stream")]
     Connection(#[from] quinn::ConnectionError),
 
@@ -78,7 +47,7 @@ pub enum ClientRequestError {
 }
 
 #[derive(Error, Debug)]
-pub enum ClientAddLearnerError {
+pub(crate) enum ClientAddLearnerError {
     #[error("failed to add node as learner")]
     AddLearner(#[from] AddLearnerError),
 
@@ -90,7 +59,7 @@ pub enum ClientAddLearnerError {
 }
 
 #[derive(Error, Debug)]
-pub enum ClientWriteError {
+pub(crate) enum ClientWriteError {
     #[error("remote client write request failed")]
     ClientWrite(#[from] RaftError<NodeId, ORClientWriteError<NodeId, Node>>),
 
@@ -102,7 +71,7 @@ pub enum ClientWriteError {
 }
 
 #[derive(Error, Debug)]
-pub enum ClientRaftError {
+pub(crate) enum ClientRaftError {
     #[error("Raft API error")]
     Raft(#[from] RaftError<NodeId>),
 
@@ -114,13 +83,13 @@ pub enum ClientRaftError {
 }
 
 #[derive(Clone)]
-pub struct Client {
+pub(crate) struct Client {
     conn: Connection,
     target_id: Option<NodeId>,
 }
 
 impl Client {
-    pub async fn new(
+    pub(super) async fn new(
         node: &Node,
         node_id: Option<NodeId>,
         endpoint: &Endpoint,
@@ -151,7 +120,7 @@ impl Client {
         Ok(resp?)
     }
 
-    pub async fn add_learner(
+    pub(crate) async fn add_learner(
         &self,
         id: NodeId,
         node: Node,
@@ -166,7 +135,7 @@ impl Client {
         }
     }
 
-    pub async fn change_membership(
+    pub(crate) async fn change_membership(
         &self,
         members: ChangeMembers<NodeId, Node>,
         retain: bool,
@@ -180,7 +149,7 @@ impl Client {
         }
     }
 
-    pub async fn append_entries(
+    pub(crate) async fn append_entries(
         &self,
         entries: AppendEntriesRequest<TypeConfig>,
     ) -> Result<AppendEntriesResponse<NodeId>, ClientRaftError> {
@@ -191,7 +160,7 @@ impl Client {
         }
     }
 
-    pub async fn vote(
+    pub(crate) async fn vote(
         &self,
         rpc: VoteRequest<NodeId>,
     ) -> Result<VoteResponse<NodeId>, ClientRaftError> {
@@ -202,53 +171,85 @@ impl Client {
         }
     }
 
-    pub async fn insert(&self, request: InsertRequest) -> Result<ClientResponse, ClientWriteError> {
-        let resp = self.request(RequestBody::Insert(request)).await?;
+    pub(crate) async fn insert<M, KV>(
+        &self,
+        map: M,
+        key: KV,
+        value: KV,
+    ) -> Result<Option<Vec<u8>>, ClientWriteError>
+    where
+        M: Into<String>,
+        KV: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::Insert {
+                map: map.into(),
+                key: key.into(),
+                value: value.into(),
+            })
+            .await?;
         match resp {
             Response::ClientWrite(r) => {
                 let r = r?;
-                Ok(ClientResponse {
-                    value: r.data.value,
-                })
+                Ok(r.data.value)
             }
             _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
-    pub async fn get(&self, request: GetRequest) -> Result<ClientResponse, ClientWriteError> {
-        let resp = self.request(RequestBody::Get(request)).await?;
+    pub(crate) async fn get<M, K>(
+        &self,
+        map: M,
+        key: K,
+    ) -> Result<Option<Vec<u8>>, ClientWriteError>
+    where
+        M: Into<String>,
+        K: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::Get {
+                map: map.into(),
+                key: key.into(),
+            })
+            .await?;
         match resp {
             Response::Get(response) => Ok(response),
             _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
-    pub async fn len(&self, request: LenRequest) -> Result<LenResponse, ClientWriteError> {
-        let resp = self.request(RequestBody::Len(request)).await?;
+    pub(crate) async fn len<M>(&self, map: M) -> Result<Option<usize>, ClientWriteError>
+    where
+        M: Into<String>,
+    {
+        let resp = self.request(RequestBody::Len { map: map.into() }).await?;
         match resp {
             Response::Len(response) => Ok(response),
             _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
-    pub async fn clear(&self, request: ClearRequest) -> Result<(), ClientWriteError> {
-        let resp = self.request(RequestBody::Clear(request)).await?;
+    pub(crate) async fn clear<M>(&self, map: M) -> Result<(), ClientWriteError>
+    where
+        M: Into<String>,
+    {
+        let resp = self.request(RequestBody::Clear { map: map.into() }).await?;
         match resp {
             Response::Clear => Ok(()),
             _ => Err(ClientWriteError::UnknownResponse(resp)),
         }
     }
 
-    pub fn is_open(&self) -> bool {
+    pub(super) fn is_open(&self) -> bool {
         self.conn.close_reason().is_none()
     }
 
     /// Wait for the client to be closed for any reason
-    pub async fn closed(&self) -> ConnectionError {
+    pub(super) async fn closed(&self) -> ConnectionError {
         self.conn.closed().await
     }
 
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         self.conn.close(0u32.into(), b"done");
     }
 }

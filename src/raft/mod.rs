@@ -3,16 +3,16 @@ use std::io::Cursor;
 use openraft::{RaftTypeConfig, TokioRuntime, impls::OneshotResponder};
 use serde::{Deserialize, Serialize};
 
-use crate::raft::node::Node;
+use crate::raft::node::{Node, NodeId};
 
-pub mod heartbeat;
-pub mod log;
-pub mod network;
-pub mod node;
-pub mod state;
+pub(crate) mod heartbeat;
+pub(crate) mod log;
+pub(crate) mod network;
+pub(crate) mod node;
+pub(crate) mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum RaftRequest {
+pub(crate) enum RaftRequest {
     Insert {
         map: String,
         key: Vec<u8>,
@@ -24,17 +24,12 @@ pub enum RaftRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RaftResponse {
-    pub value: Option<Vec<u8>>,
+pub(crate) struct RaftResponse {
+    pub(crate) value: Option<Vec<u8>>,
 }
 
-#[cfg(not(test))]
-pub type NodeId = ulid::Ulid;
-#[cfg(test)]
-pub type NodeId = u64;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TypeConfig {}
+pub(crate) struct TypeConfig {}
 
 impl RaftTypeConfig for TypeConfig {
     type D = RaftRequest;
@@ -66,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mem_store() -> anyhow::Result<()> {
+    fn test_mem_store() -> Result<(), Box<StorageError<NodeId>>> {
         Ok(openraft::testing::Suite::test_all(MyStoreBuilder {})?)
     }
 }
