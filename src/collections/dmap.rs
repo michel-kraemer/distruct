@@ -33,7 +33,7 @@ where
         let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
-            .pool()
+            .connection_cache()
             .connect(&leader, Some(leader_id))
             .await?;
         let result = client
@@ -73,7 +73,7 @@ where
         let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
-            .pool()
+            .connection_cache()
             .connect(&leader, Some(leader_id))
             .await?;
 
@@ -98,7 +98,7 @@ where
         let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
-            .pool()
+            .connection_cache()
             .connect(&leader, Some(leader_id))
             .await?;
 
@@ -121,7 +121,7 @@ where
         let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
         let client = self
             .cluster
-            .pool()
+            .connection_cache()
             .connect(&leader, Some(leader_id))
             .await?;
 

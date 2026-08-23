@@ -14,7 +14,7 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(super) fn new(endpoint: Endpoint) -> Self {
+    pub(crate) fn new(endpoint: Endpoint) -> Self {
         let (sender, receiver) = unbounded_channel();
 
         tokio::spawn(async move {

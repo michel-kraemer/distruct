@@ -11,6 +11,11 @@ use openraft::{
     ChangeMembers::{AddVoterIds, RemoveNodes, RemoveVoters},
     Raft, ServerState, StoredMembership,
 };
+use quinn::{
+    ClientConfig, Endpoint, ServerConfig,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
+    rustls::{self, RootCertStore},
+};
 use serde::{Deserialize, Serialize};
 use tokio::{
     select,
@@ -24,8 +29,8 @@ use tokio::{
 use crate::{
     collections::dmap::DMap,
     connection::{
+        cache::ConnectionCache,
         message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
-        pool::Pool,
         server::Server,
     },
     raft::{
@@ -38,6 +43,8 @@ use crate::{
     },
     rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
+
+const ALPN_QUIC_CLUSTER: &[u8] = b"cluster";
 
 pub struct ClusterConfig {
     bind_addr: SocketAddr,
@@ -102,7 +109,7 @@ impl ClusterConfigBuilder {
 pub struct Cluster {
     raft: Arc<Raft<TypeConfig>>,
     state_machine: Arc<StateMachine>,
-    pool: Arc<Pool>,
+    connection_cache: Arc<ConnectionCache>,
     shutdown_tx: oneshot::Sender<()>,
     watch_membership_handle: JoinHandle<()>,
     detect_failures_handle: JoinHandle<()>,
@@ -112,14 +119,13 @@ pub struct Cluster {
 impl Cluster {
     pub async fn spawn(config: ClusterConfig) -> Result<Self> {
         // create endpoint
-        let pool = Arc::new(
-            Pool::new(config.bind_addr, config.certs, config.key)
-                .context("failed to create connection pool")?,
-        );
+        let endpoint = create_endpoint(config.bind_addr, config.certs, config.key)
+            .context("failed to create endpoint")?;
 
         // run server
-        let server = pool.spawn_server();
-        info!("Listening on {} ...", pool.local_addr());
+        let server = Server::new(endpoint.clone());
+        let local_addr = endpoint.local_addr()?;
+        info!("Listening on {local_addr} ...");
 
         // generate unique server ID
         #[cfg(not(test))]
@@ -136,7 +142,11 @@ impl Cluster {
             ..Default::default()
         });
         let heartbeat_monitor = Arc::new(HeartbeatMonitor::default());
-        let network = NetworkFactory::new(Arc::clone(&heartbeat_monitor), Arc::clone(&pool));
+        let connection_cache = Arc::new(ConnectionCache::new(endpoint));
+        let network = NetworkFactory::new(
+            Arc::clone(&heartbeat_monitor),
+            Arc::clone(&connection_cache),
+        );
         let log_storage = LogStorage::default();
         let state_machine = Arc::new(StateMachine::default());
         let raft: Arc<Raft<TypeConfig>> = Arc::new(
@@ -157,10 +167,11 @@ impl Cluster {
         {
             let raft = Arc::clone(&raft);
             let shutdown_broadcast_tx = shutdown_broadcast_tx.clone();
-            let pool = Arc::clone(&pool);
+            let connection_cache = Arc::clone(&connection_cache);
             tokio::spawn(async move {
                 if let Ok(()) = shutdown_rx.await
-                    && let Err(e) = on_graceful_shutdown(raft, shutdown_broadcast_tx, &pool).await
+                    && let Err(e) =
+                        on_graceful_shutdown(raft, shutdown_broadcast_tx, &connection_cache).await
                 {
                     error!("Unable to gracefully shutdown node: {e}");
                     std::process::exit(1);
@@ -204,11 +215,11 @@ impl Cluster {
             })
         };
 
-        let public_addr = config.public_addr.unwrap_or(pool.local_addr());
+        let public_addr = config.public_addr.unwrap_or(local_addr);
         let server_node = Node::new(public_addr, config.public_server_name);
         if let Some(seed) = config.seed {
             // join cluster as learner
-            let client = pool
+            let client = connection_cache
                 .connect(&Node::new(seed.0, seed.1), None)
                 .await
                 .with_context(|| format!("failed to connect to node {}", seed.0))?;
@@ -253,7 +264,7 @@ impl Cluster {
         Ok(Self {
             raft,
             state_machine,
-            pool,
+            connection_cache,
             shutdown_tx,
             watch_membership_handle,
             detect_failures_handle,
@@ -269,8 +280,8 @@ impl Cluster {
         Ok(())
     }
 
-    pub(crate) fn pool(&self) -> &Arc<Pool> {
-        &self.pool
+    pub(crate) fn connection_cache(&self) -> &Arc<ConnectionCache> {
+        &self.connection_cache
     }
 
     pub(crate) fn state_machine(&self) -> &Arc<StateMachine> {
@@ -297,6 +308,44 @@ impl Cluster {
             None
         }
     }
+}
+
+fn create_endpoint(
+    addr: SocketAddr,
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+) -> Result<Endpoint> {
+    // create client configuration
+    let mut store = RootCertStore::empty();
+    for cert in &certs {
+        store.add(cert.clone())?;
+    }
+
+    let mut client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(store)
+        .with_no_client_auth();
+
+    client_crypto.alpn_protocols = vec![ALPN_QUIC_CLUSTER.to_vec()];
+
+    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+
+    // create server configuration
+    let mut server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+
+    server_crypto.alpn_protocols = vec![ALPN_QUIC_CLUSTER.to_vec()];
+
+    let mut server_config =
+        ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.max_concurrent_uni_streams(0_u8.into());
+
+    // create endpoint
+    let mut endpoint = Endpoint::server(server_config, addr)?;
+    endpoint.set_default_client_config(client_config);
+
+    Ok(endpoint)
 }
 
 async fn main_loop(
@@ -419,7 +468,7 @@ async fn force_shutdown(raft: Arc<Raft<TypeConfig>>, shutdown_broadcast_tx: broa
 async fn on_graceful_shutdown(
     raft: Arc<Raft<TypeConfig>>,
     shutdown_broadcast_tx: broadcast::Sender<()>,
-    pool: &Pool,
+    connection_cache: &ConnectionCache,
 ) -> Result<()> {
     if raft.metrics().borrow().membership_config.nodes().count() > 1 {
         let nodes = BTreeSet::from([raft.server_metrics().borrow().id]);
@@ -437,7 +486,7 @@ async fn on_graceful_shutdown(
                     .cloned()
             });
             if let Some(leader_node) = leader_node {
-                let client = pool.connect(&leader_node, leader_id).await?;
+                let client = connection_cache.connect(&leader_node, leader_id).await?;
                 if raft.server_metrics().borrow().state.is_learner() {
                     client.change_membership(RemoveNodes(nodes), false).await?;
                 } else {

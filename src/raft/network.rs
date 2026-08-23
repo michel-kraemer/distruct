@@ -12,8 +12,8 @@ use openraft::{
 
 use crate::{
     connection::{
+        cache::ConnectionCache,
         client::{Client, ClientRaftError, ClientRequestError},
-        pool::Pool,
     },
     raft::{NodeId, TypeConfig, heartbeat::HeartbeatMonitor, node::Node},
 };
@@ -22,7 +22,7 @@ pub(crate) struct Network {
     node_id: NodeId,
     node: Node,
     heartbeat_monitor: Arc<HeartbeatMonitor>,
-    pool: Arc<Pool>,
+    connection_cache: Arc<ConnectionCache>,
 }
 
 impl Network {
@@ -30,13 +30,13 @@ impl Network {
         node_id: NodeId,
         node: Node,
         heartbeat_monitor: Arc<HeartbeatMonitor>,
-        pool: Arc<Pool>,
+        connection_cache: Arc<ConnectionCache>,
     ) -> Self {
         Self {
             node_id,
             node,
             heartbeat_monitor,
-            pool,
+            connection_cache,
         }
     }
 
@@ -49,7 +49,7 @@ impl Network {
         O: AsyncFnOnce(Client) -> Result<R, ClientRaftError>,
     {
         let client = self
-            .pool
+            .connection_cache
             .connect(&self.node, Some(self.node_id))
             .await
             .map_err(|e| Unreachable::new(&e))?;
@@ -58,9 +58,9 @@ impl Network {
         let result = match timeout {
             Ok(result) => result,
             Err(e) => {
-                // Connection to client has timed out. Remove it from the pool
-                // so we don't try to use it again.
-                self.pool.force_remove(self.node.addr());
+                // Connection to client has timed out. Remove it from the
+                // connection cache so we don't try to use it again.
+                self.connection_cache.force_remove(self.node.addr());
                 return Err(RPCError::from(Unreachable::new(&e)));
             }
         };
@@ -130,14 +130,17 @@ impl RaftNetwork<TypeConfig> for Network {
 
 pub(crate) struct NetworkFactory {
     heartbeat_monitor: Arc<HeartbeatMonitor>,
-    pool: Arc<Pool>,
+    connection_cache: Arc<ConnectionCache>,
 }
 
 impl NetworkFactory {
-    pub(crate) fn new(heartbeat_monitor: Arc<HeartbeatMonitor>, pool: Arc<Pool>) -> Self {
+    pub(crate) fn new(
+        heartbeat_monitor: Arc<HeartbeatMonitor>,
+        connection_cache: Arc<ConnectionCache>,
+    ) -> Self {
         Self {
             heartbeat_monitor,
-            pool,
+            connection_cache,
         }
     }
 }
@@ -150,7 +153,7 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
             target,
             node.clone(),
             Arc::clone(&self.heartbeat_monitor),
-            Arc::clone(&self.pool),
+            Arc::clone(&self.connection_cache),
         )
     }
 }
