@@ -5,11 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
 use log::{error, info, warn};
 use openraft::{
     ChangeMembers::{AddVoterIds, RemoveNodes, RemoveVoters},
     Raft, ServerState, StoredMembership,
+    error::RaftError,
 };
 use quinn::{
     ClientConfig, Endpoint, ServerConfig,
@@ -23,16 +23,18 @@ use tokio::{
         broadcast,
         oneshot::{self, Sender},
     },
-    task::JoinHandle,
+    task::{JoinError, JoinHandle},
 };
 
 use crate::{
+    Result,
     collections::dmap::DMap,
     connection::{
         cache::ConnectionCache,
-        message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
+        message::{Request, RequestBody, Response},
         server::Server,
     },
+    error::{ConfigError, RemoteError, SpawnClusterError},
     raft::{
         RaftRequest, TypeConfig,
         heartbeat::HeartbeatMonitor,
@@ -117,14 +119,15 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub async fn spawn(config: ClusterConfig) -> Result<Self> {
+    pub async fn spawn(config: ClusterConfig) -> Result<Self, SpawnClusterError> {
         // create endpoint
-        let endpoint = create_endpoint(config.bind_addr, config.certs, config.key)
-            .context("failed to create endpoint")?;
+        let endpoint = create_endpoint(config.bind_addr, config.certs, config.key)?;
 
         // run server
         let server = Server::new(endpoint.clone());
-        let local_addr = endpoint.local_addr()?;
+        let local_addr = endpoint
+            .local_addr()
+            .map_err(SpawnClusterError::CreateEndpoint)?;
         info!("Listening on {local_addr} ...");
 
         // generate unique server ID
@@ -158,7 +161,7 @@ impl Cluster {
                 Arc::clone(&state_machine),
             )
             .await
-            .context("failed to create Raft task")?,
+            .map_err(RaftError::from)?,
         );
 
         // configure graceful shutdown
@@ -222,42 +225,39 @@ impl Cluster {
             let client = connection_cache
                 .connect(&Node::new(seed.0, seed.1), None)
                 .await
-                .with_context(|| format!("failed to connect to node {}", seed.0))?;
+                .map_err(SpawnClusterError::Join)?;
 
             // TODO if response of add_learner or change_membership tells us to
             // forward to leader, then do so
             client
                 .add_learner(server_id, server_node, true)
                 .await
-                .context("failed to join cluster as learner")?;
+                .map_err(SpawnClusterError::Join)?;
             info!("Joined cluster as learner");
 
             client
                 .change_membership(AddVoterIds(BTreeSet::from([server_id])), true)
                 .await
-                .context("failed to upgrade to voter")?;
+                .map_err(SpawnClusterError::Join)?;
             info!("Upgraded to voter");
 
             // wait for the current node to become a follower
             // TODO do we need to make the timeout configurable?
             raft.wait(Some(Duration::from_secs(10)))
                 .state(ServerState::Follower, "state")
-                .await
-                .context("Node did not become follower within 10 seconds")?;
+                .await?;
 
             client.close();
         } else {
             // initialize single-node cluster
             raft.initialize(BTreeMap::from([(server_id, server_node)]))
-                .await
-                .context("Unable to initialize single-node cluster")?;
+                .await?;
 
             // wait for the current node to become the leader
             // TODO do we need to make the timeout configurable?
             raft.wait(Some(Duration::from_secs(10)))
                 .state(ServerState::Leader, "state")
-                .await
-                .context("Node did not become leader within 10 seconds")?;
+                .await?;
             info!("Node is now leader");
         }
 
@@ -272,7 +272,7 @@ impl Cluster {
         })
     }
 
-    pub async fn shutdown(self) -> Result<()> {
+    pub async fn shutdown(self) -> Result<(), JoinError> {
         let _ = self.shutdown_tx.send(());
         self.watch_membership_handle.await?;
         self.detect_failures_handle.await?;
@@ -314,11 +314,11 @@ fn create_endpoint(
     addr: SocketAddr,
     certs: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
-) -> Result<Endpoint> {
+) -> Result<Endpoint, SpawnClusterError> {
     // create client configuration
     let mut store = RootCertStore::empty();
     for cert in &certs {
-        store.add(cert.clone())?;
+        store.add(cert.clone()).map_err(ConfigError::from)?;
     }
 
     let mut client_crypto = rustls::ClientConfig::builder()
@@ -327,22 +327,27 @@ fn create_endpoint(
 
     client_crypto.alpn_protocols = vec![ALPN_QUIC_CLUSTER.to_vec()];
 
-    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+    let client_config = ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(client_crypto).map_err(ConfigError::from)?,
+    ));
 
     // create server configuration
     let mut server_crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+        .with_single_cert(certs, key)
+        .map_err(ConfigError::from)?;
 
     server_crypto.alpn_protocols = vec![ALPN_QUIC_CLUSTER.to_vec()];
 
-    let mut server_config =
-        ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
+    let mut server_config = ServerConfig::with_crypto(Arc::new(
+        QuicServerConfig::try_from(server_crypto).map_err(ConfigError::from)?,
+    ));
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(0_u8.into());
 
     // create endpoint
-    let mut endpoint = Endpoint::server(server_config, addr)?;
+    let mut endpoint =
+        Endpoint::server(server_config, addr).map_err(SpawnClusterError::CreateEndpoint)?;
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
@@ -366,7 +371,7 @@ async fn main_loop(
 
 async fn handle_message(
     message: Request,
-    reply: Sender<Result<Response, ResponseError>>,
+    reply: Sender<Result<Response, RemoteError>>,
     raft: &Arc<Raft<TypeConfig>>,
     state_machine: &Arc<StateMachine>,
 ) {
@@ -374,7 +379,7 @@ async fn handle_message(
         let current_id = raft.server_metrics().borrow().id;
         if target_id != current_id {
             error!("Reveived message for node {target_id}, but we are node {current_id}");
-            if let Err(e) = reply.send(Err(ResponseError::InvalidNode {
+            if let Err(e) = reply.send(Err(RemoteError::InvalidNode {
                 target_id,
                 actual_id: current_id,
             })) {
@@ -395,7 +400,7 @@ async fn handle_message(
                 .find(|(_, m)| m.addr() == peer.addr())
             {
                 // a node with this socket address has already joined
-                Err(AddLearnerError::NodeExists {
+                Err(RemoteError::NodeExists {
                     addr: other_node.1.addr(),
                     id: *other_node.0,
                 })
@@ -409,23 +414,26 @@ async fn handle_message(
 
         RequestBody::ChangeMembership(members, retain) => {
             info!("Client wants to change membership");
-            let cw = raft.change_membership(members, retain).await;
+            let cw = raft
+                .change_membership(members, retain)
+                .await
+                .map_err(|e| e.into());
             Response::ClientWrite(cw)
         }
 
         RequestBody::Append(entries) => {
-            let response = raft.append_entries(entries).await;
+            let response = raft.append_entries(entries).await.map_err(|e| e.into());
             Response::Append(response)
         }
 
         RequestBody::Vote(rpc) => {
-            let response = raft.vote(rpc).await;
+            let response = raft.vote(rpc).await.map_err(|e| e.into());
             Response::Vote(response)
         }
 
         RequestBody::Insert { map, key, value } => {
             let cr = RaftRequest::Insert { map, key, value };
-            let cw = raft.client_write(cr).await;
+            let cw = raft.client_write(cr).await.map_err(|e| e.into());
             Response::ClientWrite(cw)
         }
 
@@ -444,7 +452,7 @@ async fn handle_message(
 
         RequestBody::Clear { map } => {
             let cr = RaftRequest::Clear { map };
-            let cw = raft.client_write(cr).await;
+            let cw = raft.client_write(cr).await.map_err(|e| e.into());
             Response::ClientWrite(cw)
         }
     };
@@ -474,7 +482,9 @@ async fn on_graceful_shutdown(
         let nodes = BTreeSet::from([raft.server_metrics().borrow().id]);
 
         if raft.server_metrics().borrow().state.is_leader() {
-            raft.change_membership(RemoveVoters(nodes), false).await?;
+            raft.change_membership(RemoveVoters(nodes), false)
+                .await
+                .map_err(RemoteError::from)?;
         } else {
             let leader_id = raft.metrics().borrow().current_leader;
             let leader_node = leader_id.and_then(|leader_id| {

@@ -1,9 +1,8 @@
 use std::{borrow::Borrow, marker::PhantomData};
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::Cluster;
+use crate::{Error, Result, cluster::Cluster};
 
 pub struct DMap<'c, K, V> {
     name: String,
@@ -30,7 +29,7 @@ where
     pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
         // TODO redirect to another node and store new leader if necessary
 
-        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
         let client = self
             .cluster
             .connection_cache()
@@ -70,7 +69,7 @@ where
     {
         // TODO redirect to another node and store new leader if necessary
 
-        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
         let client = self
             .cluster
             .connection_cache()
@@ -95,7 +94,7 @@ where
     pub async fn len(&self) -> Result<usize> {
         // TODO redirect to another node and store new leader if necessary
 
-        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
         let client = self
             .cluster
             .connection_cache()
@@ -118,7 +117,7 @@ where
     pub async fn clear(&self) -> Result<()> {
         // TODO redirect to another node and store new leader if necessary
 
-        let (leader_id, leader) = self.cluster.get_leader().context("unable to find leader")?;
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
         let client = self
             .cluster
             .connection_cache()

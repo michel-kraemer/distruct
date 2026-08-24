@@ -11,10 +11,8 @@ use openraft::{
 };
 
 use crate::{
-    connection::{
-        cache::ConnectionCache,
-        client::{Client, ClientRaftError, ClientRequestError},
-    },
+    Error, Result,
+    connection::{cache::ConnectionCache, client::Client},
     raft::{NodeId, TypeConfig, heartbeat::HeartbeatMonitor, node::Node},
 };
 
@@ -46,7 +44,7 @@ impl Network {
         option: RPCOption,
     ) -> Result<R, RPCError<NodeId, Node, RaftError<NodeId>>>
     where
-        O: AsyncFnOnce(Client) -> Result<R, ClientRaftError>,
+        O: AsyncFnOnce(Client) -> Result<R>,
     {
         let client = self
             .connection_cache
@@ -75,23 +73,15 @@ impl Network {
             }
 
             Err(e) => Err(match e {
-                ClientRaftError::Raft(re) => RPCError::from(RemoteError::new_with_node(
+                Error::Transport(transport_error) => {
+                    RPCError::from(NetworkError::new(&transport_error))
+                }
+                Error::Raft(raft_error) => RPCError::from(RemoteError::new_with_node(
                     self.node_id,
                     self.node.clone(),
-                    re,
+                    *raft_error,
                 )),
-                ClientRaftError::Request(re) => match re {
-                    ClientRequestError::Connection(_)
-                    | ClientRequestError::DeserializeResponse(_)
-                    | ClientRequestError::SerializeRequest(_) => {
-                        RPCError::from(Unreachable::new(&re))
-                    }
-                    ClientRequestError::ReadToEnd(_) | ClientRequestError::Write(_) => {
-                        RPCError::from(NetworkError::new(&re))
-                    }
-                    ClientRequestError::Response(_) => RPCError::from(Unreachable::new(&re)),
-                },
-                ClientRaftError::UnknownResponse(_) => RPCError::from(Unreachable::new(&e)),
+                _ => RPCError::from(Unreachable::new(&e)),
             }),
         }
     }

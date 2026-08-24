@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use log::{debug, error, info};
 use quinn::{ConnectionError, Endpoint, Incoming, RecvStream, SendStream};
 use tokio::sync::{
@@ -7,10 +6,14 @@ use tokio::sync::{
 };
 use tracing::{Instrument, info_span};
 
-use crate::connection::message::{Request, Response, ResponseError};
+use crate::{
+    Result,
+    connection::message::{Request, Response},
+    error::{RemoteError, TransportError},
+};
 
 pub(crate) struct Server {
-    receiver: UnboundedReceiver<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
+    receiver: UnboundedReceiver<(Request, oneshot::Sender<Result<Response, RemoteError>>)>,
 }
 
 impl Server {
@@ -39,16 +42,16 @@ impl Server {
 
     pub(crate) async fn recv(
         &mut self,
-    ) -> Option<(Request, oneshot::Sender<Result<Response, ResponseError>>)> {
+    ) -> Option<(Request, oneshot::Sender<Result<Response, RemoteError>>)> {
         self.receiver.recv().await
     }
 }
 
 async fn handle_connection(
     conn: Incoming,
-    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
+    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, RemoteError>>)>,
 ) -> Result<()> {
-    let connection = conn.await?;
+    let connection = conn.await.map_err(TransportError::from)?;
 
     let span = info_span!(
         "connection",
@@ -66,9 +69,9 @@ async fn handle_connection(
                     | ConnectionError::LocallyClosed,
                 ) => {
                     debug!("connection closed");
-                    return anyhow::Ok(());
+                    return crate::error::Ok(());
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(TransportError::from(e).into()),
                 Ok(s) => s,
             };
 
@@ -90,12 +93,11 @@ async fn handle_connection(
 
 async fn handle_request(
     (mut send, mut recv): (SendStream, RecvStream),
-    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, ResponseError>>)>,
-) -> Result<()> {
+    sender: UnboundedSender<(Request, oneshot::Sender<Result<Response, RemoteError>>)>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let req = recv
         .read_to_end(64 * 1024) // TODO maximum message size should be configurable
-        .await
-        .context("failed to read request")?;
+        .await?;
 
     let message: Request = postcard::from_bytes(&req)?;
 
@@ -106,9 +108,7 @@ async fn handle_request(
     if let Ok(reply) = reply_receiver.await {
         // write response
         let msg = postcard::to_allocvec(&reply)?;
-        send.write_all(&msg)
-            .await
-            .context("failed to send response")?;
+        send.write_all(&msg).await?;
     }
 
     send.finish().unwrap();

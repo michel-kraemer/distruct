@@ -399,7 +399,6 @@ dependencies = [
 name = "distruct"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dashmap",
  "log",
  "openraft",

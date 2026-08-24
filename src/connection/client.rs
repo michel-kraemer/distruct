@@ -1,86 +1,20 @@
 use openraft::{
     ChangeMembers,
-    error::{ClientWriteError as ORClientWriteError, RaftError},
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, VoteRequest, VoteResponse,
     },
 };
-use quinn::{Connection, ConnectionError, Endpoint, ReadToEndError, WriteError};
-use thiserror::Error;
+use quinn::{Connection, ConnectionError, Endpoint};
 
 use crate::{
-    connection::message::{AddLearnerError, Request, RequestBody, Response, ResponseError},
+    Result,
+    connection::message::{Request, RequestBody, Response},
+    error::{InternalError, ProtocolError, RemoteError, TransportError},
     raft::{
         TypeConfig,
         node::{Node, NodeId},
     },
 };
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientConnectError {
-    #[error("failed to connect")]
-    Connect(#[from] quinn::ConnectError),
-
-    #[error("connection failed")]
-    Connection(#[from] quinn::ConnectionError),
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientRequestError {
-    #[error("failed to open stream")]
-    Connection(#[from] quinn::ConnectionError),
-
-    #[error("failed to deserialize response")]
-    DeserializeResponse(#[source] postcard::Error),
-
-    #[error("failed to read response")]
-    ReadToEnd(#[from] ReadToEndError),
-
-    #[error("remote operation failed")]
-    Response(#[from] ResponseError),
-
-    #[error("failed to serialize request")]
-    SerializeRequest(#[source] postcard::Error),
-
-    #[error("failed to send request")]
-    Write(#[from] WriteError),
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientAddLearnerError {
-    #[error("failed to add node as learner")]
-    AddLearner(#[from] AddLearnerError),
-
-    #[error("failed to execute request")]
-    Request(#[from] ClientRequestError),
-
-    #[error("unknown response")]
-    UnknownResponse(Response),
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientWriteError {
-    #[error("remote client write request failed")]
-    ClientWrite(#[from] RaftError<NodeId, ORClientWriteError<NodeId, Node>>),
-
-    #[error("failed to execute request")]
-    Request(#[from] ClientRequestError),
-
-    #[error("unknown response")]
-    UnknownResponse(Response),
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ClientRaftError {
-    #[error("Raft API error")]
-    Raft(#[from] RaftError<NodeId>),
-
-    #[error("failed to execute request")]
-    Request(#[from] ClientRequestError),
-
-    #[error("unknown response")]
-    UnknownResponse(Response),
-}
 
 #[derive(Clone)]
 pub(crate) struct Client {
@@ -93,30 +27,39 @@ impl Client {
         node: &Node,
         node_id: Option<NodeId>,
         endpoint: &Endpoint,
-    ) -> Result<Self, ClientConnectError> {
+    ) -> Result<Self> {
         Ok(Self {
             target_id: node_id,
-            conn: endpoint.connect(node.addr(), node.server_name())?.await?,
+            conn: endpoint
+                .connect(node.addr(), node.server_name())
+                .map_err(TransportError::from)?
+                .await
+                .map_err(TransportError::from)?,
         })
     }
 
-    async fn request(&self, request: RequestBody) -> Result<Response, ClientRequestError> {
+    async fn request(&self, request: RequestBody) -> Result<Response> {
         // open stream
-        let (mut send, mut recv) = self.conn.open_bi().await?;
+        let (mut send, mut recv) = self.conn.open_bi().await.map_err(TransportError::from)?;
 
         // send request
         let msg = Request {
             target_id: self.target_id,
             body: request,
         };
-        let request = postcard::to_allocvec(&msg).map_err(ClientRequestError::SerializeRequest)?;
-        send.write_all(&request).await?;
+        let request = postcard::to_allocvec(&msg).map_err(InternalError::SerializeRequest)?;
+        send.write_all(&request)
+            .await
+            .map_err(TransportError::from)?;
         send.finish().unwrap();
 
         // read response
-        let resp = recv.read_to_end(usize::MAX).await?;
-        let resp: Result<Response, ResponseError> =
-            postcard::from_bytes(&resp).map_err(ClientRequestError::DeserializeResponse)?;
+        let resp = recv
+            .read_to_end(usize::MAX)
+            .await
+            .map_err(TransportError::from)?;
+        let resp: Result<Response, RemoteError> =
+            postcard::from_bytes(&resp).map_err(ProtocolError::DeserializeResponse)?;
         Ok(resp?)
     }
 
@@ -125,13 +68,13 @@ impl Client {
         id: NodeId,
         node: Node,
         blocking: bool,
-    ) -> Result<ClientWriteResponse<TypeConfig>, ClientAddLearnerError> {
+    ) -> Result<ClientWriteResponse<TypeConfig>> {
         let resp = self
             .request(RequestBody::AddLearner(id, node, blocking))
             .await?;
         match resp {
             Response::AddLearner(r) => Ok(r?),
-            _ => Err(ClientAddLearnerError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
@@ -139,44 +82,36 @@ impl Client {
         &self,
         members: ChangeMembers<NodeId, Node>,
         retain: bool,
-    ) -> Result<ClientWriteResponse<TypeConfig>, ClientWriteError> {
+    ) -> Result<ClientWriteResponse<TypeConfig>> {
         let resp = self
             .request(RequestBody::ChangeMembership(members, retain))
             .await?;
         match resp {
             Response::ClientWrite(r) => Ok(r?),
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
     pub(crate) async fn append_entries(
         &self,
         entries: AppendEntriesRequest<TypeConfig>,
-    ) -> Result<AppendEntriesResponse<NodeId>, ClientRaftError> {
+    ) -> Result<AppendEntriesResponse<NodeId>> {
         let resp = self.request(RequestBody::Append(entries)).await?;
         match resp {
             Response::Append(r) => Ok(r?),
-            _ => Err(ClientRaftError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
-    pub(crate) async fn vote(
-        &self,
-        rpc: VoteRequest<NodeId>,
-    ) -> Result<VoteResponse<NodeId>, ClientRaftError> {
+    pub(crate) async fn vote(&self, rpc: VoteRequest<NodeId>) -> Result<VoteResponse<NodeId>> {
         let resp = self.request(RequestBody::Vote(rpc)).await?;
         match resp {
             Response::Vote(r) => Ok(r?),
-            _ => Err(ClientRaftError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
-    pub(crate) async fn insert<M, KV>(
-        &self,
-        map: M,
-        key: KV,
-        value: KV,
-    ) -> Result<Option<Vec<u8>>, ClientWriteError>
+    pub(crate) async fn insert<M, KV>(&self, map: M, key: KV, value: KV) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,
         KV: Into<Vec<u8>>,
@@ -193,15 +128,11 @@ impl Client {
                 let r = r?;
                 Ok(r.data.value)
             }
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
-    pub(crate) async fn get<M, K>(
-        &self,
-        map: M,
-        key: K,
-    ) -> Result<Option<Vec<u8>>, ClientWriteError>
+    pub(crate) async fn get<M, K>(&self, map: M, key: K) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,
         K: Into<Vec<u8>>,
@@ -214,29 +145,29 @@ impl Client {
             .await?;
         match resp {
             Response::Get(response) => Ok(response),
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
-    pub(crate) async fn len<M>(&self, map: M) -> Result<Option<usize>, ClientWriteError>
+    pub(crate) async fn len<M>(&self, map: M) -> Result<Option<usize>>
     where
         M: Into<String>,
     {
         let resp = self.request(RequestBody::Len { map: map.into() }).await?;
         match resp {
             Response::Len(response) => Ok(response),
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 
-    pub(crate) async fn clear<M>(&self, map: M) -> Result<(), ClientWriteError>
+    pub(crate) async fn clear<M>(&self, map: M) -> Result<()>
     where
         M: Into<String>,
     {
         let resp = self.request(RequestBody::Clear { map: map.into() }).await?;
         match resp {
             Response::Clear => Ok(()),
-            _ => Err(ClientWriteError::UnknownResponse(resp)),
+            _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
 

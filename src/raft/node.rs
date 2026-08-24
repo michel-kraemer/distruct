@@ -3,12 +3,12 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use serde::{Deserialize, Serialize};
 
 #[cfg(not(test))]
-pub(crate) type NodeId = ulid::Ulid;
+pub type NodeId = ulid::Ulid;
 #[cfg(test)]
-pub(crate) type NodeId = u64;
+pub type NodeId = u64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Node {
+pub struct Node {
     addr: SocketAddr,
     server_name: String,
 }

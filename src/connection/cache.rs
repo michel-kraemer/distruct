@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use anyhow::Result;
 use dashmap::DashMap;
 use quinn::Endpoint;
 
 use crate::{
-    connection::client::{Client, ClientConnectError},
+    Result,
+    connection::client::Client,
     raft::node::{Node, NodeId},
 };
 
@@ -22,11 +22,7 @@ impl ConnectionCache {
         }
     }
 
-    pub(crate) async fn connect(
-        &self,
-        node: &Node,
-        node_id: Option<NodeId>,
-    ) -> Result<Client, ClientConnectError> {
+    pub(crate) async fn connect(&self, node: &Node, node_id: Option<NodeId>) -> Result<Client> {
         if let Some(cached) = self.connections.get(&node.addr())
             && cached.is_open()
         {
