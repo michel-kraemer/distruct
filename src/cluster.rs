@@ -431,6 +431,11 @@ async fn handle_message(
             Response::Vote(response)
         }
 
+        RequestBody::ContainsKey { map, key } => {
+            let value = state_machine.contains_key(&map, &key).await;
+            Response::ContainsKey(value)
+        }
+
         RequestBody::Insert { map, key, value } => {
             let cr = RaftRequest::Insert { map, key, value };
             let cw = raft.client_write(cr).await.map_err(|e| e.into());
@@ -443,6 +448,11 @@ async fn handle_message(
                 .await
                 .map(|v| v.clone());
             Response::Get(value)
+        }
+
+        RequestBody::Remove { map, key } => {
+            let value = state_machine.remove(&map, &key).await;
+            Response::Remove(value)
         }
 
         RequestBody::Len { map } => {

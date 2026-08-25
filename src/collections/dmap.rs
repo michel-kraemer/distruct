@@ -26,6 +26,38 @@ where
         }
     }
 
+    pub async fn contains_key_stale<Q>(&self, k: &Q) -> Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        let key = postcard::to_allocvec(k)?;
+        Ok(self
+            .cluster
+            .state_machine()
+            .contains_key(&self.name, &key)
+            .await)
+    }
+
+    pub async fn contains_key<Q>(&self, k: &Q) -> Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        // TODO redirect to another node and store new leader if necessary
+
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
+        let client = self
+            .cluster
+            .connection_cache()
+            .connect(&leader, Some(leader_id))
+            .await?;
+
+        client
+            .contains_key(&self.name, postcard::to_allocvec(k)?)
+            .await
+    }
+
     pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
         // TODO redirect to another node and store new leader if necessary
 
@@ -77,6 +109,27 @@ where
             .await?;
 
         let result = client.get(&self.name, postcard::to_allocvec(k)?).await?;
+
+        Ok(result
+            .map(|value| postcard::from_bytes(&value))
+            .transpose()?)
+    }
+
+    pub async fn remove<Q>(&self, k: &Q) -> Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        // TODO redirect to another node and store new leader if necessary
+
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
+        let client = self
+            .cluster
+            .connection_cache()
+            .connect(&leader, Some(leader_id))
+            .await?;
+
+        let result = client.remove(&self.name, postcard::to_allocvec(k)?).await?;
 
         Ok(result
             .map(|value| postcard::from_bytes(&value))

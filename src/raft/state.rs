@@ -53,6 +53,15 @@ pub(crate) struct StateMachine {
 }
 
 impl StateMachine {
+    pub(crate) async fn contains_key(&self, map: &str, key: &[u8]) -> bool {
+        let sm = self.state_machine.read().await;
+        sm.data
+            .maps
+            .get(map)
+            .map(|m| m.contains_key(key))
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn get_with_lock(
         &self,
         map: &str,
@@ -60,6 +69,11 @@ impl StateMachine {
     ) -> Option<RwLockReadGuard<'_, Vec<u8>>> {
         let sm = self.state_machine.read().await;
         RwLockReadGuard::try_map(sm, |sm| sm.data.maps.get(map).and_then(|m| m.get(key))).ok()
+    }
+
+    pub(crate) async fn remove(&self, map: &str, key: &[u8]) -> Option<Vec<u8>> {
+        let mut sm = self.state_machine.write().await;
+        sm.data.maps.get_mut(map).and_then(|m| m.remove(key))
     }
 
     pub(crate) async fn map_len(&self, map: &str) -> Option<usize> {

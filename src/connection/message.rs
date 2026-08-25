@@ -27,12 +27,20 @@ pub(crate) enum RequestBody {
     ChangeMembership(ChangeMembers<NodeId, Node>, bool),
     Append(AppendEntriesRequest<TypeConfig>),
     Vote(VoteRequest<NodeId>),
+    ContainsKey {
+        map: String,
+        key: Vec<u8>,
+    },
     Insert {
         map: String,
         key: Vec<u8>,
         value: Vec<u8>,
     },
     Get {
+        map: String,
+        key: Vec<u8>,
+    },
+    Remove {
         map: String,
         key: Vec<u8>,
     },
@@ -50,7 +58,9 @@ pub(crate) enum Response {
     ClientWrite(Result<ClientWriteResponse<TypeConfig>, RemoteError>),
     Append(Result<AppendEntriesResponse<NodeId>, RemoteError>),
     Vote(Result<VoteResponse<NodeId>, RemoteError>),
+    ContainsKey(bool),
     Get(Option<Vec<u8>>),
+    Remove(Option<Vec<u8>>),
     Len(Option<usize>),
     Clear,
 }

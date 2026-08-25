@@ -111,6 +111,23 @@ impl Client {
         }
     }
 
+    pub(crate) async fn contains_key<M, K>(&self, map: M, key: K) -> Result<bool>
+    where
+        M: Into<String>,
+        K: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::ContainsKey {
+                map: map.into(),
+                key: key.into(),
+            })
+            .await?;
+        match resp {
+            Response::ContainsKey(response) => Ok(response),
+            _ => Err(ProtocolError::UnknownResponse)?,
+        }
+    }
+
     pub(crate) async fn insert<M, KV>(&self, map: M, key: KV, value: KV) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,
@@ -145,6 +162,23 @@ impl Client {
             .await?;
         match resp {
             Response::Get(response) => Ok(response),
+            _ => Err(ProtocolError::UnknownResponse)?,
+        }
+    }
+
+    pub(crate) async fn remove<M, K>(&self, map: M, key: K) -> Result<Option<Vec<u8>>>
+    where
+        M: Into<String>,
+        K: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::Remove {
+                map: map.into(),
+                key: key.into(),
+            })
+            .await?;
+        match resp {
+            Response::Remove(response) => Ok(response),
             _ => Err(ProtocolError::UnknownResponse)?,
         }
     }

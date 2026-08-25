@@ -31,8 +31,8 @@ pub enum Error {
     #[error("unable to find leader")]
     LeaderNotFound,
 
-    #[error("value serialization error: {0}")]
-    Serialize(#[from] postcard::Error),
+    #[error("failed to serialize or deserialize value: {0}")]
+    Serialization(#[from] postcard::Error),
 
     #[error("raft rejected request: {0}")]
     Raft(#[source] Box<RaftError<NodeId>>),
