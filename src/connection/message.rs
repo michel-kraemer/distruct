@@ -6,13 +6,9 @@ use openraft::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Result,
-    error::RemoteError,
-    raft::{
-        TypeConfig,
-        node::{Node, NodeId},
-    },
+use crate::raft::{
+    TypeConfig,
+    node::{Node, NodeId},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -54,10 +50,10 @@ pub(crate) enum RequestBody {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum Response {
-    AddLearner(Result<ClientWriteResponse<TypeConfig>, RemoteError>),
-    ClientWrite(Result<ClientWriteResponse<TypeConfig>, RemoteError>),
-    Append(Result<AppendEntriesResponse<NodeId>, RemoteError>),
-    Vote(Result<VoteResponse<NodeId>, RemoteError>),
+    AddLearner(ClientWriteResponse<TypeConfig>),
+    ClientWrite(ClientWriteResponse<TypeConfig>),
+    Append(AppendEntriesResponse<NodeId>),
+    Vote(VoteResponse<NodeId>),
     ContainsKey(bool),
     Get(Option<Vec<u8>>),
     Remove(Option<Vec<u8>>),

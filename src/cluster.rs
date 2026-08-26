@@ -389,10 +389,10 @@ async fn handle_message(
         }
     }
 
-    let response = match message.body {
+    let response: Result<Response, RemoteError> = match message.body {
         RequestBody::AddLearner(id, peer, blocking) => {
             info!("Client {id} {} wants to join as learner", peer.addr());
-            let response = if let Some(other_node) = raft
+            if let Some(other_node) = raft
                 .metrics()
                 .borrow()
                 .membership_config
@@ -407,39 +407,42 @@ async fn handle_message(
             } else {
                 raft.add_learner(id, peer, blocking)
                     .await
+                    .map(Response::AddLearner)
                     .map_err(|e| e.into())
-            };
-            Response::AddLearner(response)
+            }
         }
 
         RequestBody::ChangeMembership(members, retain) => {
             info!("Client wants to change membership");
-            let cw = raft
-                .change_membership(members, retain)
+            raft.change_membership(members, retain)
                 .await
-                .map_err(|e| e.into());
-            Response::ClientWrite(cw)
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
         }
 
-        RequestBody::Append(entries) => {
-            let response = raft.append_entries(entries).await.map_err(|e| e.into());
-            Response::Append(response)
-        }
+        RequestBody::Append(entries) => raft
+            .append_entries(entries)
+            .await
+            .map(Response::Append)
+            .map_err(|e| e.into()),
 
-        RequestBody::Vote(rpc) => {
-            let response = raft.vote(rpc).await.map_err(|e| e.into());
-            Response::Vote(response)
-        }
+        RequestBody::Vote(rpc) => raft
+            .vote(rpc)
+            .await
+            .map(Response::Vote)
+            .map_err(|e| e.into()),
 
         RequestBody::ContainsKey { map, key } => {
             let value = state_machine.contains_key(&map, &key).await;
-            Response::ContainsKey(value)
+            Ok(Response::ContainsKey(value))
         }
 
         RequestBody::Insert { map, key, value } => {
             let cr = RaftRequest::Insert { map, key, value };
-            let cw = raft.client_write(cr).await.map_err(|e| e.into());
-            Response::ClientWrite(cw)
+            raft.client_write(cr)
+                .await
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
         }
 
         RequestBody::Get { map, key } => {
@@ -447,27 +450,29 @@ async fn handle_message(
                 .get_with_lock(&map, &key)
                 .await
                 .map(|v| v.clone());
-            Response::Get(value)
+            Ok(Response::Get(value))
         }
 
         RequestBody::Remove { map, key } => {
             let value = state_machine.remove(&map, &key).await;
-            Response::Remove(value)
+            Ok(Response::Remove(value))
         }
 
         RequestBody::Len { map } => {
             let len = state_machine.map_len(&map).await;
-            Response::Len(len)
+            Ok(Response::Len(len))
         }
 
         RequestBody::Clear { map } => {
             let cr = RaftRequest::Clear { map };
-            let cw = raft.client_write(cr).await.map_err(|e| e.into());
-            Response::ClientWrite(cw)
+            raft.client_write(cr)
+                .await
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
         }
     };
 
-    if let Err(e) = reply.send(Ok(response)) {
+    if let Err(e) = reply.send(response) {
         error!("Unable to send response client: {e:?}");
     }
 }

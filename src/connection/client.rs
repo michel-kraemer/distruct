@@ -73,8 +73,8 @@ impl Client {
             .request(RequestBody::AddLearner(id, node, blocking))
             .await?;
         match resp {
-            Response::AddLearner(r) => Ok(r?),
-            _ => Err(ProtocolError::UnknownResponse)?,
+            Response::AddLearner(r) => Ok(r),
+            _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
 
@@ -87,8 +87,8 @@ impl Client {
             .request(RequestBody::ChangeMembership(members, retain))
             .await?;
         match resp {
-            Response::ClientWrite(r) => Ok(r?),
-            _ => Err(ProtocolError::UnknownResponse)?,
+            Response::ClientWrite(r) => Ok(r),
+            _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
 
@@ -98,16 +98,16 @@ impl Client {
     ) -> Result<AppendEntriesResponse<NodeId>> {
         let resp = self.request(RequestBody::Append(entries)).await?;
         match resp {
-            Response::Append(r) => Ok(r?),
-            _ => Err(ProtocolError::UnknownResponse)?,
+            Response::Append(r) => Ok(r),
+            _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
 
     pub(crate) async fn vote(&self, rpc: VoteRequest<NodeId>) -> Result<VoteResponse<NodeId>> {
         let resp = self.request(RequestBody::Vote(rpc)).await?;
         match resp {
-            Response::Vote(r) => Ok(r?),
-            _ => Err(ProtocolError::UnknownResponse)?,
+            Response::Vote(r) => Ok(r),
+            _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
 
@@ -141,11 +141,8 @@ impl Client {
             })
             .await?;
         match resp {
-            Response::ClientWrite(r) => {
-                let r = r?;
-                Ok(r.data.value)
-            }
-            _ => Err(ProtocolError::UnknownResponse)?,
+            Response::ClientWrite(r) => Ok(r.data.value),
+            _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
 
