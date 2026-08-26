@@ -1,17 +1,14 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use dashmap::DashMap;
-use quinn::Endpoint;
+use quinn::{Connection, Endpoint};
 
-use crate::{
-    Result,
-    connection::client::Client,
-    raft::node::{Node, NodeId},
-};
+use crate::{Result, error::TransportError, raft::node::Node};
 
+#[derive(Clone)]
 pub(crate) struct ConnectionCache {
     endpoint: Endpoint,
-    connections: Arc<DashMap<SocketAddr, Client>>,
+    connections: Arc<DashMap<SocketAddr, Connection>>,
 }
 
 impl ConnectionCache {
@@ -22,9 +19,9 @@ impl ConnectionCache {
         }
     }
 
-    pub(crate) async fn connect(&self, node: &Node, node_id: Option<NodeId>) -> Result<Client> {
+    pub(crate) async fn connect(&self, node: &Node) -> Result<Connection> {
         if let Some(cached) = self.connections.get(&node.addr())
-            && cached.is_open()
+            && cached.close_reason().is_none()
         {
             // return cached connection
             return Ok(cached.clone());
@@ -32,7 +29,12 @@ impl ConnectionCache {
 
         // create new connection
         let host = node.addr();
-        let result = Client::new(node, node_id, &self.endpoint).await?;
+        let result = self
+            .endpoint
+            .connect(node.addr(), node.server_name())
+            .map_err(TransportError::from)?
+            .await
+            .map_err(TransportError::from)?;
         self.connections.insert(host, result.clone());
 
         {
@@ -45,7 +47,7 @@ impl ConnectionCache {
                 // remove it from `connections` but only if the value in the map
                 // is really closed, i.e. if no new connection was added in the
                 // meantime
-                connections.remove_if(&host, |_, old| !old.is_open());
+                connections.remove_if(&host, |_, old| old.close_reason().is_some());
             });
         }
 

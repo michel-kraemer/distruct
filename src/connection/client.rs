@@ -1,14 +1,20 @@
+use std::{borrow::Cow, sync::Arc};
+
+use log::info;
 use openraft::{
     ChangeMembers,
     raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, VoteRequest, VoteResponse,
     },
 };
-use quinn::{Connection, ConnectionError, Endpoint};
+use quinn::Connection;
 
 use crate::{
     Result,
-    connection::message::{Request, RequestBody, Response},
+    connection::{
+        cache::ConnectionCache,
+        message::{Request, RequestBody, Response},
+    },
     error::{InternalError, ProtocolError, RemoteError, TransportError},
     raft::{
         TypeConfig,
@@ -20,47 +26,69 @@ use crate::{
 pub(crate) struct Client {
     conn: Connection,
     target_id: Option<NodeId>,
+    connection_cache: Arc<ConnectionCache>,
 }
 
 impl Client {
-    pub(super) async fn new(
+    pub(crate) async fn new(
         node: &Node,
         node_id: Option<NodeId>,
-        endpoint: &Endpoint,
+        connection_cache: Arc<ConnectionCache>,
     ) -> Result<Self> {
         Ok(Self {
             target_id: node_id,
-            conn: endpoint
-                .connect(node.addr(), node.server_name())
-                .map_err(TransportError::from)?
-                .await
-                .map_err(TransportError::from)?,
+            conn: connection_cache.connect(node).await?,
+            connection_cache,
         })
     }
 
     async fn request(&self, request: RequestBody) -> Result<Response> {
-        // open stream
-        let (mut send, mut recv) = self.conn.open_bi().await.map_err(TransportError::from)?;
+        let mut conn = Cow::Borrowed(&self.conn);
 
-        // send request
-        let msg = Request {
+        let mut msg = Request {
             target_id: self.target_id,
             body: request,
         };
-        let request = postcard::to_allocvec(&msg).map_err(InternalError::SerializeRequest)?;
-        send.write_all(&request)
-            .await
-            .map_err(TransportError::from)?;
-        send.finish().unwrap();
 
-        // read response
-        let resp = recv
-            .read_to_end(usize::MAX)
-            .await
-            .map_err(TransportError::from)?;
-        let resp: Result<Response, RemoteError> =
-            postcard::from_bytes(&resp).map_err(ProtocolError::DeserializeResponse)?;
-        Ok(resp?)
+        // TODO limit number of redirects
+        loop {
+            // open stream
+            let (mut send, mut recv) = conn.open_bi().await.map_err(TransportError::from)?;
+
+            // send request
+            let request = postcard::to_allocvec(&msg).map_err(InternalError::SerializeRequest)?;
+            send.write_all(&request)
+                .await
+                .map_err(TransportError::from)?;
+            send.finish().unwrap();
+
+            // read response
+            let resp = recv
+                .read_to_end(usize::MAX)
+                .await
+                .map_err(TransportError::from)?;
+            let resp: Result<Response, RemoteError> =
+                postcard::from_bytes(&resp).map_err(ProtocolError::DeserializeResponse)?;
+
+            match resp {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    if let RemoteError::RaftWrite(raft_error) = &e
+                        && let Some(ftl) = raft_error.forward_to_leader()
+                        && let Some(new_leader_id) = &ftl.leader_id
+                        && let Some(new_leader) = &ftl.leader_node
+                    {
+                        let (leader_id, leader) = (*new_leader_id, new_leader.clone());
+                        info!("Forwarding request to {leader_id} ({leader})");
+                        conn = Cow::Owned(self.connection_cache.connect(&leader).await?);
+                        msg.target_id = Some(leader_id);
+                        continue;
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) async fn add_learner(
@@ -200,15 +228,6 @@ impl Client {
             Response::Clear => Ok(()),
             _ => Err(ProtocolError::UnknownResponse)?,
         }
-    }
-
-    pub(super) fn is_open(&self) -> bool {
-        self.conn.close_reason().is_none()
-    }
-
-    /// Wait for the client to be closed for any reason
-    pub(super) async fn closed(&self) -> ConnectionError {
-        self.conn.closed().await
     }
 
     pub(crate) fn close(&self) {

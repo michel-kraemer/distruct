@@ -1,8 +1,8 @@
-use std::{borrow::Borrow, marker::PhantomData};
+use std::{borrow::Borrow, marker::PhantomData, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, cluster::Cluster};
+use crate::{Error, Result, cluster::Cluster, connection::client::Client};
 
 pub struct DMap<'c, K, V> {
     name: String,
@@ -26,6 +26,16 @@ where
         }
     }
 
+    async fn client_to_leader(&self) -> Result<Client> {
+        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
+        Client::new(
+            &leader,
+            Some(leader_id),
+            Arc::clone(self.cluster.connection_cache()),
+        )
+        .await
+    }
+
     pub async fn contains_key_stale<Q>(&self, k: &Q) -> Result<bool>
     where
         K: Borrow<Q>,
@@ -44,38 +54,22 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-
-        client
+        self.client_to_leader()
+            .await?
             .contains_key(&self.name, postcard::to_allocvec(k)?)
             .await
     }
 
     pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-        let result = client
+        Ok(self
+            .client_to_leader()
+            .await?
             .insert(
                 &self.name,
                 postcard::to_allocvec(&k)?,
                 postcard::to_allocvec(&v)?,
             )
-            .await?;
-
-        Ok(result
+            .await?
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
     }
@@ -99,18 +93,11 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-
-        let result = client.get(&self.name, postcard::to_allocvec(k)?).await?;
-
-        Ok(result
+        Ok(self
+            .client_to_leader()
+            .await?
+            .get(&self.name, postcard::to_allocvec(k)?)
+            .await?
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
     }
@@ -120,18 +107,11 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-
-        let result = client.remove(&self.name, postcard::to_allocvec(k)?).await?;
-
-        Ok(result
+        Ok(self
+            .client_to_leader()
+            .await?
+            .remove(&self.name, postcard::to_allocvec(k)?)
+            .await?
             .map(|value| postcard::from_bytes(&value))
             .transpose()?)
     }
@@ -145,17 +125,7 @@ where
     }
 
     pub async fn len(&self) -> Result<usize> {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-
-        let result = client.len(&self.name).await?;
-
+        let result = self.client_to_leader().await?.len(&self.name).await?;
         Ok(result.unwrap_or_default())
     }
 
@@ -168,17 +138,6 @@ where
     }
 
     pub async fn clear(&self) -> Result<()> {
-        // TODO redirect to another node and store new leader if necessary
-
-        let (leader_id, leader) = self.cluster.get_leader().ok_or(Error::LeaderNotFound)?;
-        let client = self
-            .cluster
-            .connection_cache()
-            .connect(&leader, Some(leader_id))
-            .await?;
-
-        client.clear(&self.name).await?;
-
-        Ok(())
+        self.client_to_leader().await?.clear(&self.name).await
     }
 }

@@ -70,8 +70,7 @@ async fn main() -> Result<()> {
     // load server certificate and private key
     let certs: Vec<CertificateDer> = CertificateDer::pem_file_iter("cert.pem")
         .context("failed to read certificate chain file")?
-        .map(|e| Ok(e?))
-        .collect::<Result<_>>()
+        .collect::<core::result::Result<_, _>>()
         .context("invalid PEM-encoded certificate")?;
     let key = PrivateKeyDer::from_pem_file("key.pem").context("failed to read private key file")?;
 
@@ -129,7 +128,7 @@ async fn main() -> Result<()> {
                 println!("CURRENT VALUE: {v:?} {}", map.len_stale().await);
                 step += 1;
                 if step == 10 && let Err(e) = map.insert("Hello".to_string(), "World".to_string()).await.context("failed to insert value") {
-                        error!("failed to insert value: {e:?}");
+                    error!("failed to insert value: {e:?}");
                 }
             }
         }

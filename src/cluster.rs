@@ -31,6 +31,7 @@ use crate::{
     collections::dmap::DMap,
     connection::{
         cache::ConnectionCache,
+        client::Client,
         message::{Request, RequestBody, Response},
         server::Server,
     },
@@ -222,10 +223,13 @@ impl Cluster {
         let server_node = Node::new(public_addr, config.public_server_name);
         if let Some(seed) = config.seed {
             // join cluster as learner
-            let client = connection_cache
-                .connect(&Node::new(seed.0, seed.1), None)
-                .await
-                .map_err(SpawnClusterError::Join)?;
+            let client = Client::new(
+                &Node::new(seed.0, seed.1),
+                None,
+                Arc::clone(&connection_cache),
+            )
+            .await
+            .map_err(SpawnClusterError::Join)?;
 
             // TODO if response of add_learner or change_membership tells us to
             // forward to leader, then do so
@@ -491,7 +495,7 @@ async fn force_shutdown(raft: Arc<Raft<TypeConfig>>, shutdown_broadcast_tx: broa
 async fn on_graceful_shutdown(
     raft: Arc<Raft<TypeConfig>>,
     shutdown_broadcast_tx: broadcast::Sender<()>,
-    connection_cache: &ConnectionCache,
+    connection_cache: &Arc<ConnectionCache>,
 ) -> Result<()> {
     if raft.metrics().borrow().membership_config.nodes().count() > 1 {
         let nodes = BTreeSet::from([raft.server_metrics().borrow().id]);
@@ -511,7 +515,8 @@ async fn on_graceful_shutdown(
                     .cloned()
             });
             if let Some(leader_node) = leader_node {
-                let client = connection_cache.connect(&leader_node, leader_id).await?;
+                let client =
+                    Client::new(&leader_node, leader_id, Arc::clone(connection_cache)).await?;
                 if raft.server_metrics().borrow().state.is_learner() {
                     client.change_membership(RemoveNodes(nodes), false).await?;
                 } else {

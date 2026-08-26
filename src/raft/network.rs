@@ -46,11 +46,13 @@ impl Network {
     where
         O: AsyncFnOnce(Client) -> Result<R>,
     {
-        let client = self
-            .connection_cache
-            .connect(&self.node, Some(self.node_id))
-            .await
-            .map_err(|e| Unreachable::new(&e))?;
+        let client = Client::new(
+            &self.node,
+            Some(self.node_id),
+            Arc::clone(&self.connection_cache),
+        )
+        .await
+        .map_err(|e| Unreachable::new(&e))?;
 
         let timeout = tokio::time::timeout(option.soft_ttl(), operation(client)).await;
         let result = match timeout {
