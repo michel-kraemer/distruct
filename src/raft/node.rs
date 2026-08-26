@@ -1,4 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{
+    fmt::{Display, Formatter},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,5 +36,11 @@ impl Default for Node {
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
             server_name: "localhost".to_string(),
         }
+    }
+}
+
+impl Display for Node {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.server_name, self.addr)
     }
 }
