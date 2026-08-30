@@ -6,9 +6,12 @@ use openraft::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::raft::{
-    TypeConfig,
-    node::{Node, NodeId},
+use crate::{
+    collections::ReadConsistency,
+    raft::{
+        TypeConfig,
+        node::{Node, NodeId},
+    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -26,6 +29,7 @@ pub(crate) enum RequestBody {
     ContainsKey {
         map: String,
         key: Vec<u8>,
+        consistency: ReadConsistency,
     },
     Insert {
         map: String,
@@ -35,6 +39,7 @@ pub(crate) enum RequestBody {
     Get {
         map: String,
         key: Vec<u8>,
+        consistency: ReadConsistency,
     },
     Remove {
         map: String,
@@ -42,6 +47,7 @@ pub(crate) enum RequestBody {
     },
     Len {
         map: String,
+        consistency: ReadConsistency,
     },
     Clear {
         map: String,

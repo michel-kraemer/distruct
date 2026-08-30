@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Parser;
 use distruct::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use distruct::{Cluster, ClusterConfigBuilder, collections::dmap::DMap};
+use distruct::{Cluster, ClusterConfigBuilder, collections::DMap};
 use log::error;
 use tokio::{select, signal, sync::oneshot};
 use tracing_subscriber::EnvFilter;

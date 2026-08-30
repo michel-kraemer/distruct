@@ -11,6 +11,7 @@ use quinn::Connection;
 
 use crate::{
     Result,
+    collections::ReadConsistency,
     connection::{
         cache::ConnectionCache,
         message::{Request, RequestBody, Response},
@@ -139,7 +140,12 @@ impl Client {
         }
     }
 
-    pub(crate) async fn contains_key<M, K>(&self, map: M, key: K) -> Result<bool>
+    pub(crate) async fn contains_key<M, K>(
+        &self,
+        map: M,
+        key: K,
+        consistency: ReadConsistency,
+    ) -> Result<bool>
     where
         M: Into<String>,
         K: Into<Vec<u8>>,
@@ -148,6 +154,7 @@ impl Client {
             .request(RequestBody::ContainsKey {
                 map: map.into(),
                 key: key.into(),
+                consistency,
             })
             .await?;
         match resp {
@@ -174,7 +181,12 @@ impl Client {
         }
     }
 
-    pub(crate) async fn get<M, K>(&self, map: M, key: K) -> Result<Option<Vec<u8>>>
+    pub(crate) async fn get<M, K>(
+        &self,
+        map: M,
+        key: K,
+        consistency: ReadConsistency,
+    ) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,
         K: Into<Vec<u8>>,
@@ -183,6 +195,7 @@ impl Client {
             .request(RequestBody::Get {
                 map: map.into(),
                 key: key.into(),
+                consistency,
             })
             .await?;
         match resp {
@@ -208,11 +221,16 @@ impl Client {
         }
     }
 
-    pub(crate) async fn len<M>(&self, map: M) -> Result<Option<usize>>
+    pub(crate) async fn len<M>(&self, map: M, consistency: ReadConsistency) -> Result<Option<usize>>
     where
         M: Into<String>,
     {
-        let resp = self.request(RequestBody::Len { map: map.into() }).await?;
+        let resp = self
+            .request(RequestBody::Len {
+                map: map.into(),
+                consistency,
+            })
+            .await?;
         match resp {
             Response::Len(response) => Ok(response),
             _ => Err(ProtocolError::UnknownResponse)?,

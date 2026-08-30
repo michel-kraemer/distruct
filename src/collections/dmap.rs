@@ -2,7 +2,9 @@ use std::{borrow::Borrow, marker::PhantomData, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, cluster::Cluster, connection::client::Client};
+use crate::{
+    Error, Result, cluster::Cluster, collections::ReadConsistency, connection::client::Client,
+};
 
 pub struct DMap<'c, K, V> {
     name: String,
@@ -49,15 +51,27 @@ where
             .await)
     }
 
+    pub async fn contains_key_with<Q>(&self, k: &Q, consistency: ReadConsistency) -> Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        if consistency == ReadConsistency::Stale {
+            self.contains_key_stale(k).await
+        } else {
+            self.client_to_leader()
+                .await?
+                .contains_key(&self.name, postcard::to_allocvec(k)?, consistency)
+                .await
+        }
+    }
+
     pub async fn contains_key<Q>(&self, k: &Q) -> Result<bool>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        self.client_to_leader()
-            .await?
-            .contains_key(&self.name, postcard::to_allocvec(k)?)
-            .await
+        self.contains_key_with(k, ReadConsistency::ReadIndex).await
     }
 
     pub async fn insert(&self, k: K, v: V) -> Result<Option<V>> {
@@ -88,18 +102,30 @@ where
             .transpose()
     }
 
+    pub async fn get_with<Q>(&self, k: &Q, consistency: ReadConsistency) -> Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Serialize,
+    {
+        if consistency == ReadConsistency::Stale {
+            self.get_stale(k).await
+        } else {
+            Ok(self
+                .client_to_leader()
+                .await?
+                .get(&self.name, postcard::to_allocvec(k)?, consistency)
+                .await?
+                .map(|value| postcard::from_bytes(&value))
+                .transpose()?)
+        }
+    }
+
     pub async fn get<Q>(&self, k: &Q) -> Result<Option<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        Ok(self
-            .client_to_leader()
-            .await?
-            .get(&self.name, postcard::to_allocvec(k)?)
-            .await?
-            .map(|value| postcard::from_bytes(&value))
-            .transpose()?)
+        self.get_with(k, ReadConsistency::ReadIndex).await
     }
 
     pub async fn remove<Q>(&self, k: &Q) -> Result<Option<V>>
@@ -124,13 +150,29 @@ where
             .unwrap_or_default()
     }
 
+    pub async fn len_with(&self, consistency: ReadConsistency) -> Result<usize> {
+        if consistency == ReadConsistency::Stale {
+            Ok(self.len_stale().await)
+        } else {
+            let result = self
+                .client_to_leader()
+                .await?
+                .len(&self.name, consistency)
+                .await?;
+            Ok(result.unwrap_or_default())
+        }
+    }
+
     pub async fn len(&self) -> Result<usize> {
-        let result = self.client_to_leader().await?.len(&self.name).await?;
-        Ok(result.unwrap_or_default())
+        self.len_with(ReadConsistency::ReadIndex).await
     }
 
     pub async fn is_empty_stale(&self) -> bool {
         self.len_stale().await == 0
+    }
+
+    pub async fn is_empty_with(&self, consistency: ReadConsistency) -> Result<bool> {
+        Ok(self.len_with(consistency).await? == 0)
     }
 
     pub async fn is_empty(&self) -> Result<bool> {

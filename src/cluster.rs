@@ -28,7 +28,7 @@ use tokio::{
 
 use crate::{
     Result,
-    collections::dmap::DMap,
+    collections::{DMap, ReadConsistency},
     connection::{
         cache::ConnectionCache,
         client::Client,
@@ -231,8 +231,6 @@ impl Cluster {
             .await
             .map_err(SpawnClusterError::Join)?;
 
-            // TODO if response of add_learner or change_membership tells us to
-            // forward to leader, then do so
             client
                 .add_learner(server_id, server_node, true)
                 .await
@@ -373,6 +371,19 @@ async fn main_loop(
     }
 }
 
+async fn ensure_consistency(
+    consistency: ReadConsistency,
+    raft: &Arc<Raft<TypeConfig>>,
+) -> Result<(), RemoteError> {
+    match consistency {
+        ReadConsistency::Stale | ReadConsistency::LeaderStale => {}
+        ReadConsistency::LeaseRead | ReadConsistency::ReadIndex => {
+            raft.ensure_linearizable().await?;
+        }
+    }
+    Ok(())
+}
+
 async fn handle_message(
     message: Request,
     reply: Sender<Result<Response, RemoteError>>,
@@ -436,9 +447,17 @@ async fn handle_message(
             .map(Response::Vote)
             .map_err(|e| e.into()),
 
-        RequestBody::ContainsKey { map, key } => {
-            let value = state_machine.contains_key(&map, &key).await;
-            Ok(Response::ContainsKey(value))
+        RequestBody::ContainsKey {
+            map,
+            key,
+            consistency,
+        } => {
+            async {
+                ensure_consistency(consistency, raft).await?;
+                let value = state_machine.contains_key(&map, &key).await;
+                Ok(Response::ContainsKey(value))
+            }
+            .await
         }
 
         RequestBody::Insert { map, key, value } => {
@@ -449,12 +468,20 @@ async fn handle_message(
                 .map_err(|e| e.into())
         }
 
-        RequestBody::Get { map, key } => {
-            let value = state_machine
-                .get_with_lock(&map, &key)
-                .await
-                .map(|v| v.clone());
-            Ok(Response::Get(value))
+        RequestBody::Get {
+            map,
+            key,
+            consistency,
+        } => {
+            async {
+                ensure_consistency(consistency, raft).await?;
+                let value = state_machine
+                    .get_with_lock(&map, &key)
+                    .await
+                    .map(|v| v.clone());
+                Ok(Response::Get(value))
+            }
+            .await
         }
 
         RequestBody::Remove { map, key } => {
@@ -462,9 +489,13 @@ async fn handle_message(
             Ok(Response::Remove(value))
         }
 
-        RequestBody::Len { map } => {
-            let len = state_machine.map_len(&map).await;
-            Ok(Response::Len(len))
+        RequestBody::Len { map, consistency } => {
+            async {
+                ensure_consistency(consistency, raft).await?;
+                let len = state_machine.map_len(&map).await;
+                Ok(Response::Len(len))
+            }
+            .await
         }
 
         RequestBody::Clear { map } => {

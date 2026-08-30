@@ -109,6 +109,11 @@ pub enum RemoteError {
     #[error("raft rejected write: {0}")]
     RaftWrite(#[source] Box<RaftError<NodeId, openraft::error::ClientWriteError<NodeId, Node>>>),
 
+    #[error("failed to check if current node is the leader: {0}")]
+    RaftCheckIsLeader(
+        #[source] Box<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>>,
+    ),
+
     #[error("raft rejected request: {0}")]
     Raft(#[source] Box<RaftError<NodeId>>),
 
@@ -128,6 +133,12 @@ pub enum RemoteError {
 impl From<RaftError<NodeId, openraft::error::ClientWriteError<NodeId, Node>>> for RemoteError {
     fn from(err: RaftError<NodeId, openraft::error::ClientWriteError<NodeId, Node>>) -> Self {
         RemoteError::RaftWrite(Box::new(err))
+    }
+}
+
+impl From<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>> for RemoteError {
+    fn from(err: RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>) -> Self {
+        RemoteError::RaftCheckIsLeader(Box::new(err))
     }
 }
 
