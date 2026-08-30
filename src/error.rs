@@ -37,6 +37,11 @@ pub enum Error {
     #[error("raft rejected request: {0}")]
     Raft(#[source] Box<RaftError<NodeId>>),
 
+    #[error("failed to check if current node is the leader: {0}")]
+    RaftCheckIsLeader(
+        #[source] Box<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>>,
+    ),
+
     #[error("internal error: {0}")]
     Internal(#[from] InternalError),
 }
@@ -44,6 +49,12 @@ pub enum Error {
 impl From<RaftError<NodeId>> for Error {
     fn from(err: RaftError<NodeId>) -> Self {
         Error::Raft(Box::new(err))
+    }
+}
+
+impl From<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>> for Error {
+    fn from(err: RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>) -> Self {
+        Error::RaftCheckIsLeader(Box::new(err))
     }
 }
 

@@ -110,6 +110,7 @@ impl ClusterConfigBuilder {
 }
 
 pub struct Cluster {
+    node_id: NodeId,
     raft: Arc<Raft<TypeConfig>>,
     state_machine: Arc<StateMachine>,
     connection_cache: Arc<ConnectionCache>,
@@ -264,6 +265,7 @@ impl Cluster {
         }
 
         Ok(Self {
+            node_id: server_id,
             raft,
             state_machine,
             connection_cache,
@@ -280,6 +282,10 @@ impl Cluster {
         self.detect_failures_handle.await?;
         self.main_loop_handle.await?;
         Ok(())
+    }
+
+    pub(crate) fn raft(&self) -> &Arc<Raft<TypeConfig>> {
+        &self.raft
     }
 
     pub(crate) fn connection_cache(&self) -> &Arc<ConnectionCache> {
@@ -309,6 +315,14 @@ impl Cluster {
         } else {
             None
         }
+    }
+
+    pub(crate) async fn is_leader(&self) -> bool {
+        self.raft
+            .current_leader()
+            .await
+            .map(|id| id == self.node_id)
+            .unwrap_or_default()
     }
 }
 
