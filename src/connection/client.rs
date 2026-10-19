@@ -18,7 +18,7 @@ use crate::{
     },
     error::{InternalError, ProtocolError, RemoteError, TransportError},
     raft::{
-        TypeConfig,
+        RaftResponse, TypeConfig,
         node::{Node, NodeId},
     },
 };
@@ -176,7 +176,31 @@ impl Client {
             })
             .await?;
         match resp {
-            Response::ClientWrite(r) => Ok(r.data.value),
+            Response::ClientWrite(ClientWriteResponse {
+                data: RaftResponse::Insert { value },
+                ..
+            }) => Ok(value),
+            _ => Err(ProtocolError::UnknownResponse.into()),
+        }
+    }
+
+    pub(crate) async fn insert_multi<M, KV>(&self, multi_map: M, key: KV, value: KV) -> Result<bool>
+    where
+        M: Into<String>,
+        KV: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::InsertMulti {
+                multi_map: multi_map.into(),
+                key: key.into(),
+                value: value.into(),
+            })
+            .await?;
+        match resp {
+            Response::ClientWrite(ClientWriteResponse {
+                data: RaftResponse::InsertMulti { inserted },
+                ..
+            }) => Ok(inserted),
             _ => Err(ProtocolError::UnknownResponse.into()),
         }
     }
@@ -204,6 +228,29 @@ impl Client {
         }
     }
 
+    pub(crate) async fn get_multi<M, K>(
+        &self,
+        multi_map: M,
+        key: K,
+        consistency: ReadConsistency,
+    ) -> Result<Option<Vec<Vec<u8>>>>
+    where
+        M: Into<String>,
+        K: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::GetMulti {
+                multi_map: multi_map.into(),
+                key: key.into(),
+                consistency,
+            })
+            .await?;
+        match resp {
+            Response::GetMulti(response) => Ok(response),
+            _ => Err(ProtocolError::UnknownResponse)?,
+        }
+    }
+
     pub(crate) async fn remove<M, K>(&self, map: M, key: K) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,
@@ -217,6 +264,24 @@ impl Client {
             .await?;
         match resp {
             Response::Remove(response) => Ok(response),
+            _ => Err(ProtocolError::UnknownResponse)?,
+        }
+    }
+
+    pub(crate) async fn remove_multi<M, KV>(&self, multi_map: M, key: KV, value: KV) -> Result<bool>
+    where
+        M: Into<String>,
+        KV: Into<Vec<u8>>,
+    {
+        let resp = self
+            .request(RequestBody::RemoveMulti {
+                multi_map: multi_map.into(),
+                key: key.into(),
+                value: value.into(),
+            })
+            .await?;
+        match resp {
+            Response::RemoveMulti(response) => Ok(response),
             _ => Err(ProtocolError::UnknownResponse)?,
         }
     }

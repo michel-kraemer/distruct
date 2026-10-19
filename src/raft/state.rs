@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::Cursor,
     sync::{
         Arc,
@@ -31,6 +31,7 @@ struct StoredSnapshot {
 #[derive(Default, Serialize, Deserialize)]
 struct StateMachineData {
     maps: HashMap<String, HashMap<Vec<u8>, Vec<u8>>>,
+    multi_maps: HashMap<String, HashMap<Vec<u8>, HashSet<Vec<u8>>>>,
 }
 
 #[derive(Default)]
@@ -71,9 +72,35 @@ impl StateMachine {
         RwLockReadGuard::try_map(sm, |sm| sm.data.maps.get(map).and_then(|m| m.get(key))).ok()
     }
 
+    pub(crate) async fn get_with_lock_multi(
+        &self,
+        multi_map: &str,
+        key: &[u8],
+    ) -> Option<RwLockReadGuard<'_, HashSet<Vec<u8>>>> {
+        let sm = self.state_machine.read().await;
+        RwLockReadGuard::try_map(sm, |sm| {
+            sm.data.multi_maps.get(multi_map).and_then(|m| m.get(key))
+        })
+        .ok()
+    }
+
     pub(crate) async fn remove(&self, map: &str, key: &[u8]) -> Option<Vec<u8>> {
         let mut sm = self.state_machine.write().await;
         sm.data.maps.get_mut(map).and_then(|m| m.remove(key))
+    }
+
+    pub(crate) async fn remove_multi_value(
+        &self,
+        multi_map: &str,
+        key: &[u8],
+        value: &[u8],
+    ) -> Option<bool> {
+        let mut sm = self.state_machine.write().await;
+        sm.data
+            .multi_maps
+            .get_mut(multi_map)
+            .and_then(|mm| mm.get_mut(key))
+            .map(|m| m.remove(value))
     }
 
     pub(crate) async fn map_len(&self, map: &str) -> Option<usize> {
@@ -111,22 +138,35 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachine> {
             sm.last_applied_log = Some(entry.log_id);
 
             match entry.payload {
-                EntryPayload::Blank => res.push(RaftResponse { value: None }),
+                EntryPayload::Blank => res.push(RaftResponse::Noop),
+
                 EntryPayload::Normal(req) => match req {
                     RaftRequest::Insert { map, key, value } => {
                         let m = sm.data.maps.entry(map).or_default();
                         let old = m.insert(key, value.clone());
-                        res.push(RaftResponse { value: old });
+                        res.push(RaftResponse::Insert { value: old });
                     }
+
+                    RaftRequest::InsertMulti {
+                        multi_map,
+                        key,
+                        value,
+                    } => {
+                        let m = sm.data.multi_maps.entry(multi_map).or_default();
+                        let inserted = m.entry(key).or_default().insert(value.clone());
+                        res.push(RaftResponse::InsertMulti { inserted });
+                    }
+
                     RaftRequest::Clear { map } => {
                         let m = sm.data.maps.entry(map).or_default();
                         m.clear();
-                        res.push(RaftResponse { value: None });
+                        res.push(RaftResponse::Clear);
                     }
                 },
+
                 EntryPayload::Membership(mem) => {
                     sm.last_membership = StoredMembership::new(Some(entry.log_id), mem);
-                    res.push(RaftResponse { value: None });
+                    res.push(RaftResponse::Noop);
                 }
             };
         }

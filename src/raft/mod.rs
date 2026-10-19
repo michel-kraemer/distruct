@@ -18,14 +18,22 @@ pub(crate) enum RaftRequest {
         key: Vec<u8>,
         value: Vec<u8>,
     },
+    InsertMulti {
+        multi_map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
     Clear {
         map: String,
     },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct RaftResponse {
-    pub(crate) value: Option<Vec<u8>>,
+pub(crate) enum RaftResponse {
+    Insert { value: Option<Vec<u8>> },
+    InsertMulti { inserted: bool },
+    Clear,
+    Noop,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

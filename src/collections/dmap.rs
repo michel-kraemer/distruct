@@ -1,21 +1,9 @@
 use std::{borrow::Borrow, marker::PhantomData, sync::Arc};
 
-use openraft::{
-    Raft,
-    error::{CheckIsLeaderError, RaftError},
-};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Error, Result,
-    cluster::Cluster,
-    collections::ReadConsistency,
-    connection::client::Client,
-    raft::{
-        TypeConfig,
-        node::{Node, NodeId},
-    },
-};
+use super::{ReadConsistency, should_read_stale};
+use crate::{Error, Result, cluster::Cluster, connection::client::Client};
 
 pub struct DMap<'c, K, V> {
     name: String,
@@ -192,51 +180,5 @@ where
 
     pub async fn clear(&self) -> Result<()> {
         self.client_to_leader().await?.clear(&self.name).await
-    }
-}
-
-async fn ensure_consistency(
-    consistency: ReadConsistency,
-    raft: &Arc<Raft<TypeConfig>>,
-) -> Result<(), RaftError<NodeId, CheckIsLeaderError<NodeId, Node>>> {
-    match consistency {
-        ReadConsistency::Stale | ReadConsistency::LeaderStale => Ok(()),
-        ReadConsistency::LeaseRead | ReadConsistency::ReadIndex => {
-            raft.ensure_linearizable().await.map(|_| ())
-        }
-    }
-}
-
-// Check whether a read for `consistency` can be served from local state instead
-// of being forwarded to the leader via a client
-async fn should_read_stale(consistency: ReadConsistency, cluster: &Cluster) -> Result<bool> {
-    match consistency {
-        ReadConsistency::Stale => {
-            // stale read is allowed
-            Ok(true)
-        }
-
-        ReadConsistency::LeaderStale | ReadConsistency::LeaseRead | ReadConsistency::ReadIndex => {
-            if !cluster.is_leader().await {
-                // we must not read from local state
-                return Ok(false);
-            }
-
-            match ensure_consistency(consistency, cluster.raft()).await {
-                Ok(()) => {
-                    // We are the leader and we were able to ensure consistency.
-                    // We can read from local state.
-                    Ok(true)
-                }
-
-                Err(RaftError::APIError(CheckIsLeaderError::ForwardToLeader(_))) => {
-                    // We thought we were the leader, but we aren't. We must not
-                    // read a possibly stale state.
-                    Ok(false)
-                }
-
-                Err(err) => Err(err.into()),
-            }
-        }
     }
 }

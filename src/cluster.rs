@@ -28,7 +28,7 @@ use tokio::{
 
 use crate::{
     Result,
-    collections::{DMap, ReadConsistency},
+    collections::{DMap, DMultiMap, ReadConsistency},
     connection::{
         cache::ConnectionCache,
         client::Client,
@@ -305,6 +305,15 @@ impl Cluster {
         DMap::new(name, self)
     }
 
+    pub fn get_multi_map<'c, K, V, N>(&'c self, name: N) -> DMultiMap<'c, K, V>
+    where
+        N: Into<String>,
+        K: Serialize,
+        V: Serialize + for<'a> Deserialize<'a>,
+    {
+        DMultiMap::new(name, self)
+    }
+
     pub(crate) fn get_leader(&self) -> Option<(NodeId, Node)> {
         let metrics = self.raft.metrics();
         let metrics = metrics.borrow();
@@ -482,6 +491,22 @@ async fn handle_message(
                 .map_err(|e| e.into())
         }
 
+        RequestBody::InsertMulti {
+            multi_map,
+            key,
+            value,
+        } => {
+            let cr = RaftRequest::InsertMulti {
+                multi_map,
+                key,
+                value,
+            };
+            raft.client_write(cr)
+                .await
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
+        }
+
         RequestBody::Get {
             map,
             key,
@@ -498,9 +523,37 @@ async fn handle_message(
             .await
         }
 
+        RequestBody::GetMulti {
+            multi_map,
+            key,
+            consistency,
+        } => {
+            async {
+                ensure_consistency(consistency, raft).await?;
+                let value = state_machine
+                    .get_with_lock_multi(&multi_map, &key)
+                    .await
+                    .map(|v| v.iter().cloned().collect());
+                Ok(Response::GetMulti(value))
+            }
+            .await
+        }
+
         RequestBody::Remove { map, key } => {
             let value = state_machine.remove(&map, &key).await;
             Ok(Response::Remove(value))
+        }
+
+        RequestBody::RemoveMulti {
+            multi_map,
+            key,
+            value,
+        } => {
+            let removed = state_machine
+                .remove_multi_value(&multi_map, &key, &value)
+                .await
+                .unwrap_or_default();
+            Ok(Response::RemoveMulti(removed))
         }
 
         RequestBody::Len { map, consistency } => {

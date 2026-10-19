@@ -36,14 +36,29 @@ pub(crate) enum RequestBody {
         key: Vec<u8>,
         value: Vec<u8>,
     },
+    InsertMulti {
+        multi_map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
     Get {
         map: String,
+        key: Vec<u8>,
+        consistency: ReadConsistency,
+    },
+    GetMulti {
+        multi_map: String,
         key: Vec<u8>,
         consistency: ReadConsistency,
     },
     Remove {
         map: String,
         key: Vec<u8>,
+    },
+    RemoveMulti {
+        multi_map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
     },
     Len {
         map: String,
@@ -62,7 +77,9 @@ pub(crate) enum Response {
     Vote(VoteResponse<NodeId>),
     ContainsKey(bool),
     Get(Option<Vec<u8>>),
+    GetMulti(Option<Vec<Vec<u8>>>),
     Remove(Option<Vec<u8>>),
+    RemoveMulti(bool),
     Len(Option<usize>),
     Clear,
 }
