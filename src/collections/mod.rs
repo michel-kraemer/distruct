@@ -1,3 +1,14 @@
+//! Distributed collections.
+//!
+//! Create instances of distributed collections through one of the methods
+//! provided by [`Cluster`]. For instance:
+//!
+//! ```no_run
+//! # use distruct::collections::DMap;
+//! # fn get_map(cluster: distruct::Cluster) {
+//! let map: DMap<String, String> = cluster.get_map("my_distributed_map");
+//! # }
+//! ```
 mod dmap;
 mod dmultimap;
 
@@ -21,6 +32,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Specifies consistency guarantees when reading from a distributed collection
 pub enum ReadConsistency {
     /// Read from any node's local state machine. There is no coordination and
     /// no staleness bound. The node may be arbitrarily behind the leader.

@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 use super::{ReadConsistency, should_read_stale};
 use crate::{Error, Result, cluster::Cluster, connection::client::Client};
 
+/// A distributed map that can store multiple values per key.
+///
+/// Keys and values must implement [`Serialize`] and [`Deserialize`].
+///
+/// A multi-map stores multiple values per key similar to a
+/// [`HashMap`](std::collection::HashMap) where the values are of type
+/// [`HashSet<V>`](std::collection::HashSet). Duplicate key-value pairs are
+/// prevented. The order of inserted values is not preserved.
+///
+/// Create a distributed multi-map through [`Cluster::get_multi_map`] as
+/// follows:
+///
+/// ```no_run
+/// # use distruct::collections::DMap;
+/// # fn get_multi_map(cluster: distruct::Cluster) {
+/// let multi_map: DMultiMap<String, String> = cluster.get_multi_map("my_multi_map");
+/// # }
 pub struct DMultiMap<'c, K, V> {
     name: String,
     cluster: &'c Cluster,
@@ -37,23 +54,39 @@ where
         .await
     }
 
-    pub async fn insert(&self, k: K, v: V) -> Result<bool> {
+    /// Insert a key-value pair into the map.
+    ///
+    /// Existing values will not be replaced.
+    ///
+    /// The method returns `true` if the value was inserted into the map or
+    /// `false` if it already existed.
+    pub async fn insert(&self, key: K, value: V) -> Result<bool> {
         self.client_to_leader()
             .await?
             .insert_multi(
                 &self.name,
-                postcard::to_allocvec(&k)?,
-                postcard::to_allocvec(&v)?,
+                postcard::to_allocvec(&key)?,
+                postcard::to_allocvec(&value)?,
             )
             .await
     }
 
-    pub async fn get_stale<Q>(&self, k: &Q) -> Result<Vec<V>>
+    /// Get all values for a given `key` from the map but accept a stale result.
+    ///
+    /// If the map does not contain the `key`, return and empty [`Vec`].
+    ///
+    /// This is similar to calling [`get_with`](Self::get_with) using
+    /// [`ReadConsistency::Stale`].
+    ///
+    /// The method accesses the current node's local copy of the map. There is
+    /// no communication with other nodes in the cluster. The node may be
+    /// arbitrarily behind the leader and the result might be stale.
+    pub async fn get_stale<Q>(&self, key: &Q) -> Result<Vec<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        let key = postcard::to_allocvec(k)?;
+        let key = postcard::to_allocvec(key)?;
         Ok(self
             .cluster
             .state_machine()
@@ -68,18 +101,22 @@ where
             .unwrap_or_default())
     }
 
-    pub async fn get_with<Q>(&self, k: &Q, consistency: ReadConsistency) -> Result<Vec<V>>
+    /// Get all values for a given `key` from the map using a given [read
+    /// consistency guarantee](ReadConsistency).
+    ///
+    /// If the map does not contain the `key`, return and empty [`Vec`].
+    pub async fn get_with<Q>(&self, key: &Q, consistency: ReadConsistency) -> Result<Vec<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
         if should_read_stale(consistency, self.cluster).await? {
-            self.get_stale(k).await
+            self.get_stale(key).await
         } else {
             Ok(self
                 .client_to_leader()
                 .await?
-                .get_multi(&self.name, postcard::to_allocvec(k)?, consistency)
+                .get_multi(&self.name, postcard::to_allocvec(key)?, consistency)
                 .await?
                 .map(|set| {
                     set.iter()
@@ -91,15 +128,26 @@ where
         }
     }
 
-    pub async fn get<Q>(&self, k: &Q) -> Result<Vec<V>>
+    /// Get all values for a given `key` from the map using strong consistency.
+    ///
+    /// If the map does not contain the `key`, return and empty [`Vec`].
+    ///
+    /// This is similar to calling [`get_with`](Self::get_with) using
+    /// [`ReadConsistency::ReadIndex`].
+    pub async fn get<Q>(&self, key: &Q) -> Result<Vec<V>>
     where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        self.get_with(k, ReadConsistency::ReadIndex).await
+        self.get_with(key, ReadConsistency::ReadIndex).await
     }
 
-    pub async fn remove<Q>(&self, k: &Q, v: &Q) -> Result<bool>
+    /// Remove a key-value pair from the map.
+    ///
+    /// Other values with the same key are retained.
+    ///
+    /// Returns `true` if the key-value pair was actually present in the map.
+    pub async fn remove<Q>(&self, key: &Q, value: &Q) -> Result<bool>
     where
         K: Borrow<Q>,
         V: Borrow<Q>,
@@ -109,8 +157,8 @@ where
             .await?
             .remove_multi(
                 &self.name,
-                postcard::to_allocvec(k)?,
-                postcard::to_allocvec(v)?,
+                postcard::to_allocvec(key)?,
+                postcard::to_allocvec(value)?,
             )
             .await
     }
