@@ -1,3 +1,4 @@
+//! Error types exposed by this crate.
 use std::net::SocketAddr;
 
 use openraft::{
@@ -9,14 +10,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::raft::node::{Node, NodeId};
 
+/// Alias for a [`core::result::Result`] with the error type
+/// [`distruct::Error`](Error).
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
+/// Equivalent to `Ok::<_, distruct::Error>(value)`.
 #[allow(non_snake_case)]
 #[inline]
 pub fn Ok<T>(value: T) -> Result<T> {
     Result::Ok(value)
 }
 
+/// An error that can occur in a [`Cluster`](crate::Cluster).
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("transport error: {0}")]
@@ -55,6 +60,7 @@ impl From<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>> 
     }
 }
 
+/// An error that can happen when spawning a [`Cluster`](crate::Cluster).
 #[derive(Debug, thiserror::Error)]
 pub enum SpawnClusterError {
     #[error("configuration error: {0}")]
@@ -79,6 +85,7 @@ impl From<RaftError<NodeId, InitializeError<NodeId, Node>>> for SpawnClusterErro
     }
 }
 
+/// An error that can happen when configuring a [`Cluster`](crate::Cluster).
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("TLS configuration error: {0}")]
@@ -88,6 +95,7 @@ pub enum ConfigError {
     NoInitialCipherSuite(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
 }
 
+/// An error that can happen when cluster nodes communicate with each other.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("failed to connect: {0}")]
@@ -103,6 +111,7 @@ pub enum TransportError {
     Read(#[from] quinn::ReadToEndError),
 }
 
+/// An error that can happen when cluster nodes use different protocols.
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
     #[error("failed to deserialize response: {0}")]
@@ -112,6 +121,7 @@ pub enum ProtocolError {
     UnknownResponse,
 }
 
+/// An error that can happen on another cluster node.
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum RemoteError {
     #[error("raft rejected write: {0}")]
