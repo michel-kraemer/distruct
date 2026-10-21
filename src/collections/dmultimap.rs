@@ -3,7 +3,11 @@ use std::{borrow::Borrow, marker::PhantomData, sync::Arc};
 use serde::{Deserialize, Serialize};
 
 use super::{ReadConsistency, should_read_stale};
-use crate::{Error, Result, cluster::Cluster, connection::client::Client};
+use crate::{
+    cluster::Cluster,
+    connection::client::Client,
+    error::{Error, Result},
+};
 
 /// A distributed map that can store multiple values per key.
 ///

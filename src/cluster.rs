@@ -27,7 +27,6 @@ use tokio::{
 };
 
 use crate::{
-    Result,
     collections::{DMap, DMultiMap, ReadConsistency},
     connection::{
         cache::ConnectionCache,
@@ -35,7 +34,7 @@ use crate::{
         message::{Request, RequestBody, Response},
         server::Server,
     },
-    error::{ConfigError, RemoteError, SpawnClusterError},
+    error::{ConfigError, RemoteError, Result, SpawnClusterError},
     raft::{
         RaftRequest, TypeConfig,
         heartbeat::HeartbeatMonitor,

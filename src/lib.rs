@@ -1,9 +1,8 @@
 mod cluster;
 pub mod collections;
 mod connection;
-mod error;
+pub mod error;
 mod raft;
 
 pub use cluster::{Cluster, ClusterConfig, ClusterConfigBuilder};
-pub use error::*;
 pub use quinn::rustls;

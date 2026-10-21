@@ -10,13 +10,12 @@ use openraft::{
 use quinn::Connection;
 
 use crate::{
-    Result,
     collections::ReadConsistency,
     connection::{
         cache::ConnectionCache,
         message::{Request, RequestBody, Response},
     },
-    error::{ProtocolError, RemoteError, TransportError},
+    error::{ProtocolError, RemoteError, Result, TransportError},
     raft::{
         RaftResponse, TypeConfig,
         node::{Node, NodeId},

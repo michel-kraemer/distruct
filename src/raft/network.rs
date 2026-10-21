@@ -11,8 +11,8 @@ use openraft::{
 };
 
 use crate::{
-    Error, Result,
     connection::{cache::ConnectionCache, client::Client},
+    error::{Error, Result},
     raft::{NodeId, TypeConfig, heartbeat::HeartbeatMonitor, node::Node},
 };
 

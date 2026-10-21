@@ -7,9 +7,8 @@ use tokio::sync::{
 use tracing::{Instrument, info_span};
 
 use crate::{
-    Result,
     connection::message::{Request, Response},
-    error::{RemoteError, TransportError},
+    error::{RemoteError, Result, TransportError},
 };
 
 pub(crate) struct Server {

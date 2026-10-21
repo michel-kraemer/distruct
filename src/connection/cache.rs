@@ -3,7 +3,10 @@ use std::{net::SocketAddr, sync::Arc};
 use dashmap::DashMap;
 use quinn::{Connection, Endpoint};
 
-use crate::{Result, error::TransportError, raft::node::Node};
+use crate::{
+    error::{Result, TransportError},
+    raft::node::Node,
+};
 
 #[derive(Clone)]
 pub(crate) struct ConnectionCache {
