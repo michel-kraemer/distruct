@@ -41,9 +41,6 @@ pub enum Error {
     RaftCheckIsLeader(
         #[source] Box<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>>,
     ),
-
-    #[error("internal error: {0}")]
-    Internal(#[from] InternalError),
 }
 
 impl From<RaftError<NodeId>> for Error {
@@ -157,10 +154,4 @@ impl From<RaftError<NodeId>> for RemoteError {
     fn from(err: RaftError<NodeId>) -> Self {
         RemoteError::Raft(Box::new(err))
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum InternalError {
-    #[error("request serialization failed: {0}")]
-    SerializeRequest(#[source] postcard::Error),
 }

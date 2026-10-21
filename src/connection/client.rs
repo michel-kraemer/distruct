@@ -16,7 +16,7 @@ use crate::{
         cache::ConnectionCache,
         message::{Request, RequestBody, Response},
     },
-    error::{InternalError, ProtocolError, RemoteError, TransportError},
+    error::{ProtocolError, RemoteError, TransportError},
     raft::{
         RaftResponse, TypeConfig,
         node::{Node, NodeId},
@@ -57,7 +57,7 @@ impl Client {
             let (mut send, mut recv) = conn.open_bi().await.map_err(TransportError::from)?;
 
             // send request
-            let request = postcard::to_allocvec(&msg).map_err(InternalError::SerializeRequest)?;
+            let request = postcard::to_allocvec(&msg)?;
             send.write_all(&request)
                 .await
                 .map_err(TransportError::from)?;
