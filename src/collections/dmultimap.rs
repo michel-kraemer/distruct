@@ -22,7 +22,7 @@ use crate::{
 /// follows:
 ///
 /// ```no_run
-/// # use distruct::collections::DMap;
+/// # use distruct::collections::DMultiMap;
 /// # fn get_multi_map(cluster: distruct::Cluster) {
 /// let multi_map: DMultiMap<String, String> = cluster.get_multi_map("my_multi_map");
 /// # }
