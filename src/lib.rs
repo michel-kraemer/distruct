@@ -5,5 +5,5 @@ mod error;
 mod raft;
 
 pub use cluster::{Cluster, ClusterConfig, ClusterConfigBuilder};
-pub use error::{Error, Result};
+pub use error::*;
 pub use quinn::rustls;
