@@ -151,11 +151,12 @@ where
     /// Other values with the same key are retained.
     ///
     /// Returns `true` if the key-value pair was actually present in the map.
-    pub async fn remove<Q>(&self, key: &Q, value: &Q) -> Result<bool>
+    pub async fn remove<Q, U>(&self, key: &Q, value: &U) -> Result<bool>
     where
         K: Borrow<Q>,
-        V: Borrow<Q>,
+        V: Borrow<U>,
         Q: ?Sized + Serialize,
+        U: ?Sized + Serialize,
     {
         self.client_to_leader()
             .await?
