@@ -23,7 +23,7 @@ use openraft::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Cluster,
+    cluster::ClusterRef,
     error::Result,
     raft::{
         TypeConfig,
@@ -69,7 +69,7 @@ async fn ensure_consistency(
 
 // Check whether a read for `consistency` can be served from local state instead
 // of being forwarded to the leader via a client
-async fn should_read_stale(consistency: ReadConsistency, cluster: &Cluster) -> Result<bool> {
+async fn should_read_stale(consistency: ReadConsistency, cluster: &ClusterRef) -> Result<bool> {
     match consistency {
         ReadConsistency::Stale => {
             // stale read is allowed

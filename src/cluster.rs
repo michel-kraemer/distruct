@@ -34,7 +34,7 @@ use crate::{
         message::{Request, RequestBody, Response},
         server::Server,
     },
-    error::{ConfigError, RemoteError, Result, SpawnClusterError},
+    error::{ConfigError, RemoteError, Result, ShutdownClusterError, SpawnClusterError},
     raft::{
         RaftRequest, TypeConfig,
         heartbeat::HeartbeatMonitor,
@@ -108,7 +108,12 @@ impl ClusterConfigBuilder {
     }
 }
 
+#[derive(Clone)]
 pub struct Cluster {
+    inner: Arc<ClusterRef>,
+}
+
+pub(crate) struct ClusterRef {
     node_id: NodeId,
     raft: Arc<Raft<TypeConfig>>,
     state_machine: Arc<StateMachine>,
@@ -263,7 +268,7 @@ impl Cluster {
             info!("Node is now leader");
         }
 
-        Ok(Self {
+        let inner = ClusterRef {
             node_id: server_id,
             raft,
             state_machine,
@@ -272,10 +277,41 @@ impl Cluster {
             watch_membership_handle,
             detect_failures_handle,
             main_loop_handle,
+        };
+
+        Ok(Self {
+            inner: Arc::new(inner),
         })
     }
 
-    pub async fn shutdown(self) -> Result<(), JoinError> {
+    pub async fn shutdown(self) -> Result<(), ShutdownClusterError> {
+        let Some(inner) = Arc::into_inner(self.inner) else {
+            return Err(ShutdownClusterError::StillReferenced);
+        };
+        Ok(inner.shutdown().await?)
+    }
+
+    pub fn get_map<K, V, N>(&self, name: N) -> DMap<K, V>
+    where
+        N: Into<String>,
+        K: Serialize,
+        V: Serialize + for<'a> Deserialize<'a>,
+    {
+        DMap::new(name, Arc::clone(&self.inner))
+    }
+
+    pub fn get_multi_map<K, V, N>(&self, name: N) -> DMultiMap<K, V>
+    where
+        N: Into<String>,
+        K: Serialize,
+        V: Serialize + for<'a> Deserialize<'a>,
+    {
+        DMultiMap::new(name, Arc::clone(&self.inner))
+    }
+}
+
+impl ClusterRef {
+    pub(crate) async fn shutdown(self) -> Result<(), JoinError> {
         let _ = self.shutdown_tx.send(());
         self.watch_membership_handle.await?;
         self.detect_failures_handle.await?;
@@ -293,24 +329,6 @@ impl Cluster {
 
     pub(crate) fn state_machine(&self) -> &Arc<StateMachine> {
         &self.state_machine
-    }
-
-    pub fn get_map<'c, K, V, N>(&'c self, name: N) -> DMap<'c, K, V>
-    where
-        N: Into<String>,
-        K: Serialize,
-        V: Serialize + for<'a> Deserialize<'a>,
-    {
-        DMap::new(name, self)
-    }
-
-    pub fn get_multi_map<'c, K, V, N>(&'c self, name: N) -> DMultiMap<'c, K, V>
-    where
-        N: Into<String>,
-        K: Serialize,
-        V: Serialize + for<'a> Deserialize<'a>,
-    {
-        DMultiMap::new(name, self)
     }
 
     pub(crate) fn get_leader(&self) -> Option<(NodeId, Node)> {

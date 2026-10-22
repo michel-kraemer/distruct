@@ -7,6 +7,7 @@ use openraft::{
 };
 use quinn::rustls;
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinError;
 
 use crate::raft::node::{Node, NodeId};
 
@@ -83,6 +84,15 @@ impl From<RaftError<NodeId, InitializeError<NodeId, Node>>> for SpawnClusterErro
     fn from(err: RaftError<NodeId, InitializeError<NodeId, Node>>) -> Self {
         SpawnClusterError::Initialize(Box::new(err))
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ShutdownClusterError {
+    #[error("failed to join asynchronous task: {0}")]
+    Join(#[from] JoinError),
+
+    #[error("the cluster is still referenced elsewhere")]
+    StillReferenced,
 }
 
 /// An error that can happen when configuring a [`Cluster`](crate::Cluster).

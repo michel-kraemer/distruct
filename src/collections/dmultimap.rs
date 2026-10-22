@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ReadConsistency, should_read_stale};
 use crate::{
-    cluster::Cluster,
+    cluster::ClusterRef,
     connection::client::Client,
     error::{Error, Result},
 };
@@ -26,18 +26,18 @@ use crate::{
 /// # fn get_multi_map(cluster: distruct::Cluster) {
 /// let multi_map: DMultiMap<String, String> = cluster.get_multi_map("my_multi_map");
 /// # }
-pub struct DMultiMap<'c, K, V> {
+pub struct DMultiMap<K, V> {
     name: String,
-    cluster: &'c Cluster,
+    cluster: Arc<ClusterRef>,
     _marker: PhantomData<(K, V)>,
 }
 
-impl<'c, K, V> DMultiMap<'c, K, V>
+impl<K, V> DMultiMap<K, V>
 where
     K: Serialize,
     V: Serialize + for<'a> Deserialize<'a>,
 {
-    pub(crate) fn new<N>(name: N, cluster: &'c Cluster) -> Self
+    pub(crate) fn new<N>(name: N, cluster: Arc<ClusterRef>) -> Self
     where
         N: Into<String>,
     {
@@ -114,7 +114,7 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Serialize,
     {
-        if should_read_stale(consistency, self.cluster).await? {
+        if should_read_stale(consistency, &self.cluster).await? {
             self.get_stale(key).await
         } else {
             Ok(self

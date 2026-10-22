@@ -136,6 +136,10 @@ async fn main() -> Result<()> {
 
     // shutdown_rx.await?;
 
+    // make sure all references to the cluster are dropped before shutting it
+    // down
+    drop(map);
+
     cluster.shutdown().await?;
 
     Ok(())
