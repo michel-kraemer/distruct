@@ -49,6 +49,8 @@ use crate::{
 const ALPN_QUIC_CLUSTER: &[u8] = b"cluster";
 
 /// [`Cluster`] configuration.
+///
+/// Create instances using [`ClusterConfigBuilder`].
 pub struct ClusterConfig {
     bind_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
@@ -59,8 +61,6 @@ pub struct ClusterConfig {
 }
 
 /// A builder for [`ClusterConfig`].
-///
-/// Create instances using [`ClusterConfigBuilder`].
 pub struct ClusterConfigBuilder {
     bind_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
