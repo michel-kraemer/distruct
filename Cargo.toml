@@ -7,7 +7,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/michel-kraemer/distruct"
 keywords = ["raft", "consistency", "cluster", "distributed"]
-categories = ["network programming", "data structures", "asynchronous"]
+categories = ["network-programming", "data structures", "asynchronous"]
 
 [dependencies]
 dashmap = "6.2.1"
