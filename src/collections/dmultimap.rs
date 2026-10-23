@@ -14,12 +14,12 @@ use crate::{
 /// Keys and values must implement [`Serialize`] and [`Deserialize`].
 ///
 /// A multi-map stores multiple values per key similar to a
-/// [`HashMap`](std::collection::HashMap) where the values are of type
-/// [`HashSet<V>`](std::collection::HashSet). Duplicate key-value pairs are
+/// [`HashMap`](std::collections::HashMap) where the values are of type
+/// [`HashSet<V>`](std::collections::HashSet). Duplicate key-value pairs are
 /// prevented. The order of inserted values is not preserved.
 ///
-/// Create a distributed multi-map through [`Cluster::get_multi_map`] as
-/// follows:
+/// Create a distributed multi-map through
+/// [`Cluster::get_multi_map`](crate::Cluster::get_multi_map) as follows:
 ///
 /// ```no_run
 /// # use distruct::collections::DMultiMap;

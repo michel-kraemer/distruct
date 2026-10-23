@@ -12,11 +12,12 @@ use crate::{
 /// A distributed map.
 ///
 /// Works similarly to a [`HashMap`](std::collections::HashMap) but its contents
-/// can be accessed by multiple nodes in a [`Cluster`].
+/// can be accessed by multiple nodes in a [`Cluster`](crate::Cluster).
 ///
 /// Keys and values must implement [`Serialize`] and [`Deserialize`].
 ///
-/// Create a distributed map through [`Cluster::get_map`] as follows:
+/// Create a distributed map through
+/// [`Cluster::get_map`](crate::Cluster::get_map) as follows:
 ///
 /// ```no_run
 /// # use distruct::collections::DMap;

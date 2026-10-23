@@ -1,7 +1,7 @@
 //! Distributed collections.
 //!
 //! Create instances of distributed collections through one of the methods
-//! provided by [`Cluster`]. For instance:
+//! provided by [`Cluster`](crate::Cluster). For instance:
 //!
 //! ```no_run
 //! # use distruct::collections::DMap;
