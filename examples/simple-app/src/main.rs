@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use distruct::rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use distruct::{Cluster, ClusterConfigBuilder, collections::DMap};
-use log::error;
 use tokio::{select, signal, sync::oneshot};
 use tracing_subscriber::EnvFilter;
 
@@ -104,15 +103,15 @@ async fn main() -> Result<()> {
         }
     });
 
-    let map: DMap<String, String> = cluster.get_map("my_map");
+    let map: DMap<String, u64> = cluster.get_map("my_map");
     if has_seed {
-        let v = map.get("Hello").await?;
+        let v = map.get("counter").await?;
         if let Some(v) = v {
-            println!("FOUND VALUE: {v} {}", map.len().await?);
-        } else {
-            println!("INSERT NEW VALUE");
-            map.insert("Hello".to_string(), "World".to_string()).await?;
+            println!("Found counter value: {v}");
         }
+    } else {
+        println!("We are the first node in the cluster. Start a new counter ...");
+        map.insert("counter".to_string(), 0).await?;
     }
 
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -124,20 +123,20 @@ async fn main() -> Result<()> {
             },
 
             _ = interval.tick() => {
-                let v = map.get_stale("Hello").await?;
-                println!("CURRENT VALUE: {v:?} {}", map.len_stale().await);
-                step += 1;
-                if step == 10 && let Err(e) = map.insert("Hello".to_string(), "World".to_string()).await.context("failed to insert value") {
-                    error!("failed to insert value: {e:?}");
+                if has_seed {
+                    let v = map.get("counter").await?;
+                    println!("Current counter value: {v:?}");
+                } else {
+                    step += 1;
+                    map.insert("counter".to_string(), step).await.context("failed to insert value")?;
+                    println!("Updated counter value to: {step}");
                 }
             }
         }
     }
 
-    // shutdown_rx.await?;
-
-    // make sure all references to the cluster are dropped before shutting it
-    // down
+    // make sure all shared references to the cluster are dropped before
+    // shutting it down
     drop(map);
 
     cluster.shutdown().await?;
