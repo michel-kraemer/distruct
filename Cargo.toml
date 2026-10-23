@@ -1,7 +1,7 @@
 [package]
 name = "distruct"
 authors = ["Michel Kraemer <michel@undercouch.de>"]
-description = "Raft-based cluster coordination and strongly-consistent distributed data structures"
+description = "Raft-based cluster coordination and strongly consistent distributed data structures"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"

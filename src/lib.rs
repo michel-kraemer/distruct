@@ -1,4 +1,4 @@
-//! Raft-based cluster coordination and strongly-consistent distributed data
+//! Raft-based cluster coordination and strongly consistent distributed data
 //! structures.
 //!
 //! This crate provides a set of distributed data structures that can be used to

@@ -1,6 +1,6 @@
 # distruct
 
-Raft-based cluster coordination and strongly-consistent distributed data structures.
+Raft-based cluster coordination and strongly consistent distributed data structures.
 
 **This crate is in a very early alpha state. DO NOT USE IT IN PRODUCTION.**
 
