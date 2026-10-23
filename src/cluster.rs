@@ -48,6 +48,7 @@ use crate::{
 
 const ALPN_QUIC_CLUSTER: &[u8] = b"cluster";
 
+/// [`Cluster`] configuration.
 pub struct ClusterConfig {
     bind_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
@@ -57,6 +58,9 @@ pub struct ClusterConfig {
     key: PrivateKeyDer<'static>,
 }
 
+/// A builder for [`ClusterConfig`].
+///
+/// Create instances using [`ClusterConfigBuilder`].
 pub struct ClusterConfigBuilder {
     bind_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
@@ -76,22 +80,42 @@ impl Default for ClusterConfigBuilder {
 }
 
 impl ClusterConfigBuilder {
+    /// Sets the IP address and port to bind the cluster node to.
+    ///
+    /// By default, the cluster node binds to the loopback address (`::1`) on a
+    /// random port.
     pub fn with_bind_addr(mut self, addr: SocketAddr) -> Self {
         self.bind_addr = addr;
         self
     }
 
-    pub fn with_public_addr(mut self, addr: SocketAddr, server_name: String) -> Self {
+    /// Sets the public IP address and port that other cluster nodes can use to
+    /// reach this node.
+    ///
+    /// If not set, the public address defaults to the bind address.
+    pub fn with_public_addr<S>(mut self, addr: SocketAddr, server_name: S) -> Self
+    where
+        S: Into<String>,
+    {
         self.public_addr = Some(addr);
-        self.public_server_name = server_name;
+        self.public_server_name = server_name.into();
         self
     }
 
-    pub fn with_seed(mut self, addr: SocketAddr, server_name: String) -> Self {
-        self.seed = Some((addr, server_name));
+    /// Sets the address and server name of a seed node to join an existing
+    /// cluster.
+    ///
+    /// If not set, a new single-node cluster will be started.
+    pub fn with_seed<S>(mut self, addr: SocketAddr, server_name: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.seed = Some((addr, server_name.into()));
         self
     }
 
+    /// Builds the [`ClusterConfig`] object using the current builder
+    /// configuration and the given TLS certificates and private key.
     pub fn build(
         self,
         certs: Vec<CertificateDer<'static>>,
@@ -108,6 +132,7 @@ impl ClusterConfigBuilder {
     }
 }
 
+/// A cluster of nodes that share distributed data structures.
 #[derive(Clone)]
 pub struct Cluster {
     inner: Arc<ClusterRef>,
@@ -125,6 +150,7 @@ pub(crate) struct ClusterRef {
 }
 
 impl Cluster {
+    /// Spawns a new cluster node with the given configuration.
     pub async fn spawn(config: ClusterConfig) -> Result<Self, SpawnClusterError> {
         // create endpoint
         let endpoint = create_endpoint(config.bind_addr, config.certs, config.key)?;
@@ -284,6 +310,10 @@ impl Cluster {
         })
     }
 
+    /// Shuts down the cluster node.
+    ///
+    /// Note that this method will fail if there still are references to the
+    /// cluster node. All references must be dropped before calling this method.
     pub async fn shutdown(self) -> Result<(), ShutdownClusterError> {
         let Some(inner) = Arc::into_inner(self.inner) else {
             return Err(ShutdownClusterError::StillReferenced);
@@ -291,6 +321,7 @@ impl Cluster {
         Ok(inner.shutdown().await?)
     }
 
+    /// Gets or creates a distributed map with the given `name`.
     pub fn get_map<K, V, N>(&self, name: N) -> DMap<K, V>
     where
         N: Into<String>,
@@ -300,6 +331,7 @@ impl Cluster {
         DMap::new(name, Arc::clone(&self.inner))
     }
 
+    /// Gets or creates a distributed multi-map with the given `name`.
     pub fn get_multi_map<K, V, N>(&self, name: N) -> DMultiMap<K, V>
     where
         N: Into<String>,

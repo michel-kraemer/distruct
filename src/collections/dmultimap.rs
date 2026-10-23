@@ -13,9 +13,9 @@ use crate::{
 ///
 /// Keys and values must implement [`Serialize`] and [`Deserialize`].
 ///
-/// A multi-map stores multiple values per key similar to a
-/// [`HashMap`](std::collections::HashMap) where the values are of type
-/// [`HashSet<V>`](std::collections::HashSet). Duplicate key-value pairs are
+/// A multi-map stores multiple values per key, much like a
+/// [`HashMap`](std::collections::HashMap) whose values are
+/// [`HashSet<V>`](std::collections::HashSet)s. Duplicate key-value pairs are
 /// prevented. The order of inserted values is not preserved.
 ///
 /// Create a distributed multi-map through
@@ -77,7 +77,7 @@ where
 
     /// Get all values for a given `key` from the map but accept a stale result.
     ///
-    /// If the map does not contain the `key`, return and empty [`Vec`].
+    /// If the map does not contain the `key`, return an empty [`Vec`].
     ///
     /// This is similar to calling [`get_with`](Self::get_with) using
     /// [`ReadConsistency::Stale`].
@@ -108,7 +108,7 @@ where
     /// Get all values for a given `key` from the map using a given [read
     /// consistency guarantee](ReadConsistency).
     ///
-    /// If the map does not contain the `key`, return and empty [`Vec`].
+    /// If the map does not contain the `key`, return an empty [`Vec`].
     pub async fn get_with<Q>(&self, key: &Q, consistency: ReadConsistency) -> Result<Vec<V>>
     where
         K: Borrow<Q>,
@@ -134,7 +134,7 @@ where
 
     /// Get all values for a given `key` from the map using strong consistency.
     ///
-    /// If the map does not contain the `key`, return and empty [`Vec`].
+    /// If the map does not contain the `key`, return an empty [`Vec`].
     ///
     /// This is similar to calling [`get_with`](Self::get_with) using
     /// [`ReadConsistency::ReadIndex`].
