@@ -23,3 +23,7 @@ ulid = { version = "3.0.0", features = ["serde"] }
 
 [workspace]
 members = ["examples/simple-app"]
+
+[dev-dependencies]
+anyhow = "1.0.104"
+rcgen = "0.14.10"

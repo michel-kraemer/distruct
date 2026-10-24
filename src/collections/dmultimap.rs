@@ -168,3 +168,137 @@ where
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    use crate::{
+        cluster::tests::{single_node_cluster, two_nodes_cluster},
+        collections::DMultiMap,
+    };
+
+    fn sorted(mut v: Vec<u64>) -> Vec<u64> {
+        v.sort_unstable();
+        v
+    }
+
+    #[tokio::test]
+    async fn insert() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMultiMap<String, u64> = cluster.get_multi_map("my_multi_map");
+            assert!(map.get("counter").await?.is_empty());
+            assert!(map.insert("counter".to_string(), 1234).await?);
+            assert!(map.insert("counter".to_string(), 5678).await?);
+            assert!(!map.insert("counter".to_string(), 1234).await?);
+            assert_eq!(sorted(map.get("counter").await?), vec![1234, 5678]);
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMultiMap<String, u64> = cluster.get_multi_map("my_multi_map");
+            assert!(map.get("counter").await?.is_empty());
+            assert!(map.insert("counter".to_string(), 1234).await?);
+            assert_eq!(map.get("counter").await?, vec![1234]);
+            assert!(map.insert("counter".to_string(), 5678).await?);
+            assert_eq!(sorted(map.get("counter").await?), vec![1234, 5678]);
+            assert!(map.remove("counter", &1234).await?);
+            assert_eq!(map.get("counter").await?, vec![5678]);
+            assert!(map.remove("counter", &5678).await?);
+            assert!(map.get("counter").await?.is_empty());
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMultiMap<String, u64> = cluster.get_multi_map("my_multi_map");
+            assert!(!map.remove("counter", &1234).await?);
+            assert!(map.insert("counter".to_string(), 1234).await?);
+            assert!(map.insert("counter".to_string(), 5678).await?);
+
+            assert!(map.remove("counter", &1234).await?);
+            assert_eq!(map.get("counter").await?, vec![5678]);
+            assert!(!map.remove("counter", &1234).await?);
+
+            assert!(map.remove("counter", &5678).await?);
+            assert!(map.get("counter").await?.is_empty());
+            assert!(!map.remove("counter", &5678).await?);
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiple_keys() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMultiMap<String, u64> = cluster.get_multi_map("my_multi_map");
+            assert!(map.insert("a".to_string(), 1).await?);
+            assert!(map.insert("a".to_string(), 2).await?);
+            assert!(map.insert("b".to_string(), 3).await?);
+
+            assert_eq!(sorted(map.get("a").await?), vec![1, 2]);
+            assert_eq!(map.get("b").await?, vec![3]);
+
+            assert!(map.remove("a", &1).await?);
+            assert_eq!(map.get("a").await?, vec![2]);
+            assert_eq!(map.get("b").await?, vec![3]);
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_nodes() -> Result<()> {
+        let (cluster1, cluster2) = two_nodes_cluster().await?;
+
+        {
+            let map1: DMultiMap<String, u64> = cluster1.get_multi_map("my_multi_map");
+            let map2: DMultiMap<String, u64> = cluster2.get_multi_map("my_multi_map");
+
+            assert!(map1.get("counter").await?.is_empty());
+            assert!(map2.get("counter").await?.is_empty());
+
+            assert!(map1.insert("counter".to_string(), 1234).await?);
+            assert_eq!(map2.get("counter").await?, vec![1234]);
+
+            assert!(map2.insert("counter".to_string(), 5678).await?);
+            assert_eq!(sorted(map1.get("counter").await?), vec![1234, 5678]);
+            assert_eq!(sorted(map2.get("counter").await?), vec![1234, 5678]);
+            assert!(!map1.insert("counter".to_string(), 5678).await?);
+
+            assert!(map2.remove("counter", &1234).await?);
+            assert_eq!(map1.get("counter").await?, vec![5678]);
+            assert!(map1.remove("counter", &5678).await?);
+            assert!(map1.get("counter").await?.is_empty());
+            assert!(map2.get("counter").await?.is_empty());
+        }
+
+        cluster1.shutdown().await?;
+        cluster2.shutdown().await?;
+
+        Ok(())
+    }
+}

@@ -275,3 +275,128 @@ where
         self.client_to_leader().await?.clear(&self.name).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    use crate::{
+        cluster::tests::{single_node_cluster, two_nodes_cluster},
+        collections::DMap,
+    };
+
+    #[tokio::test]
+    async fn insert() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMap<String, u64> = cluster.get_map("my_map");
+            assert!(map.is_empty().await?);
+            assert!(map.insert("counter".to_string(), 1234).await?.is_none());
+            assert!(!map.is_empty().await?);
+            assert_eq!(map.len().await?, 1);
+
+            assert_eq!(map.insert("counter".to_string(), 5678).await?, Some(1234));
+            assert!(!map.is_empty().await?);
+            assert_eq!(map.len().await?, 1);
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMap<String, u64> = cluster.get_map("my_map");
+            assert!(map.get("counter").await?.is_none());
+            assert!(map.insert("counter".to_string(), 1234).await?.is_none());
+            assert_eq!(map.get("counter").await?, Some(1234));
+
+            assert_eq!(map.insert("counter".to_string(), 5678).await?, Some(1234));
+            assert_eq!(map.get("counter").await?, Some(5678));
+
+            assert_eq!(map.remove("counter").await?, Some(5678));
+            assert!(map.get("counter").await?.is_none());
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contains_key() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMap<String, u64> = cluster.get_map("my_map");
+            assert!(!map.contains_key("counter").await?);
+            assert!(map.insert("counter".to_string(), 1234).await?.is_none());
+            assert!(map.contains_key("counter").await?);
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMap<String, u64> = cluster.get_map("my_map");
+            assert!(map.remove("counter").await?.is_none());
+            assert!(map.insert("counter".to_string(), 1234).await?.is_none());
+            assert!(map.contains_key("counter").await?);
+            assert_eq!(map.remove("counter").await?, Some(1234));
+            assert!(map.is_empty().await?);
+            assert!(map.remove("counter").await?.is_none());
+        }
+
+        cluster.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn two_nodes() -> Result<()> {
+        let (cluster1, cluster2) = two_nodes_cluster().await?;
+
+        {
+            let map1: DMap<String, u64> = cluster1.get_map("my_map");
+            let map2: DMap<String, u64> = cluster2.get_map("my_map");
+
+            assert!(map1.get("counter").await?.is_none());
+            assert!(map2.get("counter").await?.is_none());
+            assert!(!map1.contains_key("counter").await?);
+            assert!(!map2.contains_key("counter").await?);
+
+            assert!(map1.insert("counter".to_string(), 1234).await?.is_none());
+            assert!(map2.contains_key("counter").await?);
+            assert!(!map2.is_empty().await?);
+            assert_eq!(map2.len().await?, 1);
+            assert_eq!(map2.get("counter").await?, Some(1234));
+
+            assert_eq!(map2.insert("counter".to_string(), 5678).await?, Some(1234));
+            assert_eq!(map1.get("counter").await?, Some(5678));
+
+            assert_eq!(map2.remove("counter").await?, Some(5678));
+            assert!(map1.get("counter").await?.is_none());
+            assert!(map2.get("counter").await?.is_none());
+            assert!(map1.is_empty().await?);
+            assert!(map2.is_empty().await?);
+            assert!(!map1.contains_key("counter").await?);
+            assert!(!map2.contains_key("counter").await?);
+        }
+
+        cluster1.shutdown().await?;
+        cluster2.shutdown().await?;
+
+        Ok(())
+    }
+}

@@ -168,7 +168,12 @@ impl Cluster {
         #[cfg(not(test))]
         let server_id = ulid::Ulid::generate();
         #[cfg(test)]
-        let server_id = 0;
+        let server_id = {
+            use std::sync::atomic::{AtomicU64, Ordering};
+
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        };
 
         // configure Raft
         // TODO make configurable
@@ -860,5 +865,59 @@ async fn detect_failures(
             force_shutdown(raft, shutdown_broadcast_tx).await;
             return;
         }
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use anyhow::{Result, bail};
+    use quinn::rustls::pki_types::PrivateKeyDer;
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+
+    use crate::{Cluster, ClusterConfigBuilder, collections::DMap, error::ShutdownClusterError};
+
+    pub async fn single_node_cluster() -> Result<Cluster> {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_string(), "::1".to_string()]).unwrap();
+        let certs = vec![cert.der().clone()];
+        let key: PrivateKeyDer<'_> = signing_key.into();
+        Ok(
+            Cluster::spawn(ClusterConfigBuilder::default().build(certs.clone(), key.clone_key()))
+                .await?,
+        )
+    }
+
+    pub async fn two_nodes_cluster() -> Result<(Cluster, Cluster)> {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_string(), "::1".to_string()]).unwrap();
+        let certs = vec![cert.der().clone()];
+        let key: PrivateKeyDer<'_> = signing_key.into();
+        let cluster1 =
+            Cluster::spawn(ClusterConfigBuilder::default().build(certs.clone(), key.clone_key()))
+                .await?;
+        let cluster2 = Cluster::spawn(
+            ClusterConfigBuilder::default()
+                .with_seed(cluster1.public_addr(), "localhost")
+                .build(certs.clone(), key.clone_key()),
+        )
+        .await?;
+        Ok((cluster1, cluster2))
+    }
+
+    #[tokio::test]
+    pub async fn shutdown_single() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        let map: DMap<String, String> = cluster.get_map("my_map");
+
+        let Err(ShutdownClusterError::StillReferenced(cluster)) = cluster.shutdown().await else {
+            bail!("expected StillReferenced error");
+        };
+
+        drop(map);
+
+        cluster.shutdown().await?;
+
+        Ok(())
     }
 }
