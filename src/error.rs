@@ -1,5 +1,8 @@
 //! Error types exposed by this crate.
-use std::net::SocketAddr;
+use std::{
+    fmt::{Debug, Formatter},
+    net::SocketAddr,
+};
 
 use openraft::{
     error::{InitializeError, RaftError},
@@ -9,7 +12,10 @@ use quinn::rustls;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinError;
 
-use crate::raft::node::{Node, NodeId};
+use crate::{
+    Cluster,
+    raft::node::{Node, NodeId},
+};
 
 /// Alias for a [`core::result::Result`] with the error type
 /// [`distruct::Error`](Error).
@@ -22,7 +28,7 @@ pub fn Ok<T>(value: T) -> Result<T> {
     Result::Ok(value)
 }
 
-/// An error that can occur in a [`Cluster`](crate::Cluster).
+/// An error that can occur in a [`Cluster`].
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("transport error: {0}")]
@@ -61,7 +67,7 @@ impl From<RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, Node>>> 
     }
 }
 
-/// An error that can happen when spawning a [`Cluster`](crate::Cluster).
+/// An error that can happen when spawning a [`Cluster`].
 #[derive(Debug, thiserror::Error)]
 pub enum SpawnClusterError {
     #[error("configuration error: {0}")]
@@ -86,16 +92,27 @@ impl From<RaftError<NodeId, InitializeError<NodeId, Node>>> for SpawnClusterErro
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ShutdownClusterError {
     #[error("failed to join asynchronous task: {0}")]
     Join(#[from] JoinError),
 
     #[error("the cluster is still referenced elsewhere")]
-    StillReferenced,
+    StillReferenced(Cluster),
 }
 
-/// An error that can happen when configuring a [`Cluster`](crate::Cluster).
+impl Debug for ShutdownClusterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Join(e) => f.debug_tuple("Join").field(e).finish(),
+
+            // Cluster does not implement Debug, so we omit its contents
+            Self::StillReferenced(_) => f.debug_tuple("StillReferenced").finish_non_exhaustive(),
+        }
+    }
+}
+
+/// An error that can happen when configuring a [`Cluster`].
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("TLS configuration error: {0}")]

@@ -318,9 +318,13 @@ impl Cluster {
     ///
     /// Note that this method will fail if there still are references to the
     /// cluster node. All references must be dropped before calling this method.
-    pub async fn shutdown(self) -> Result<(), ShutdownClusterError> {
-        let Some(inner) = Arc::into_inner(self.inner) else {
-            return Err(ShutdownClusterError::StillReferenced);
+    pub async fn shutdown(mut self) -> Result<(), ShutdownClusterError> {
+        let inner = match Arc::try_unwrap(self.inner) {
+            Ok(inner) => inner,
+            Err(inner) => {
+                self.inner = inner;
+                return Err(ShutdownClusterError::StillReferenced(self));
+            }
         };
         Ok(inner.shutdown().await?)
     }
