@@ -147,6 +147,8 @@ pub(crate) struct ClusterRef {
     watch_membership_handle: JoinHandle<()>,
     detect_failures_handle: JoinHandle<()>,
     main_loop_handle: JoinHandle<()>,
+    local_addr: SocketAddr,
+    public_addr: SocketAddr,
 }
 
 impl Cluster {
@@ -303,6 +305,8 @@ impl Cluster {
             watch_membership_handle,
             detect_failures_handle,
             main_loop_handle,
+            local_addr,
+            public_addr,
         };
 
         Ok(Self {
@@ -339,6 +343,17 @@ impl Cluster {
         V: Serialize + for<'a> Deserialize<'a>,
     {
         DMultiMap::new(name, Arc::clone(&self.inner))
+    }
+
+    /// Gets the IP address and port the cluster node is bound to.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.inner.local_addr
+    }
+
+    /// Gets the public IP address and port that other cluster nodes can use to
+    /// reach this node.
+    pub fn public_addr(&self) -> SocketAddr {
+        self.inner.public_addr
     }
 }
 
