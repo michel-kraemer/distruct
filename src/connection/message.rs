@@ -31,6 +31,10 @@ pub(crate) enum RequestBody {
         key: Vec<u8>,
         consistency: ReadConsistency,
     },
+    Keys {
+        map: String,
+        consistency: ReadConsistency,
+    },
     Insert {
         map: String,
         key: Vec<u8>,
@@ -76,6 +80,7 @@ pub(crate) enum Response {
     Append(AppendEntriesResponse<NodeId>),
     Vote(VoteResponse<NodeId>),
     ContainsKey(bool),
+    Keys(Vec<Vec<u8>>),
     Get(Option<Vec<u8>>),
     GetMulti(Option<Vec<Vec<u8>>>),
     Remove(Option<Vec<u8>>),

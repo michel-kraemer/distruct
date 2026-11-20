@@ -63,6 +63,15 @@ impl StateMachine {
             .unwrap_or_default()
     }
 
+    pub(crate) async fn map_keys(&self, map: &str) -> Vec<Vec<u8>> {
+        let sm = self.state_machine.read().await;
+        sm.data
+            .maps
+            .get(map)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn get_with_lock(
         &self,
         map: &str,

@@ -162,6 +162,22 @@ impl Client {
         }
     }
 
+    pub(crate) async fn keys<M>(&self, map: M, consistency: ReadConsistency) -> Result<Vec<Vec<u8>>>
+    where
+        M: Into<String>,
+    {
+        let resp = self
+            .request(RequestBody::Keys {
+                map: map.into(),
+                consistency,
+            })
+            .await?;
+        match resp {
+            Response::Keys(response) => Ok(response),
+            _ => Err(ProtocolError::UnknownResponse.into()),
+        }
+    }
+
     pub(crate) async fn insert<M, KV>(&self, map: M, key: KV, value: KV) -> Result<Option<Vec<u8>>>
     where
         M: Into<String>,

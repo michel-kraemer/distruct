@@ -556,6 +556,15 @@ async fn handle_message(
             .await
         }
 
+        RequestBody::Keys { map, consistency } => {
+            async {
+                ensure_consistency(consistency, raft).await?;
+                let keys = state_machine.map_keys(&map).await;
+                Ok(Response::Keys(keys))
+            }
+            .await
+        }
+
         RequestBody::Insert { map, key, value } => {
             let cr = RaftRequest::Insert { map, key, value };
             raft.client_write(cr)
@@ -898,7 +907,7 @@ pub mod tests {
         let cluster2 = Cluster::spawn(
             ClusterConfigBuilder::default()
                 .with_seed(cluster1.public_addr(), "localhost")
-                .build(certs.clone(), key.clone_key()),
+                .build(certs, key),
         )
         .await?;
         Ok((cluster1, cluster2))

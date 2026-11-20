@@ -109,6 +109,57 @@ where
             .await
     }
 
+    /// Get all keys in the map in arbitrary order but accept a stale result.
+    ///
+    /// This is similar to calling [`keys_with`](Self::keys_with) using
+    /// [`ReadConsistency::Stale`].
+    ///
+    /// The method accesses the current node's local copy of the map. There is
+    /// no communication with other nodes in the cluster. The node may be
+    /// arbitrarily behind the leader and the result might be stale.
+    pub async fn keys_stale(&self) -> Result<Vec<K>>
+    where
+        K: for<'a> Deserialize<'a>,
+    {
+        self.cluster
+            .state_machine()
+            .map_keys(&self.name)
+            .await
+            .iter()
+            .map(|key| Ok(postcard::from_bytes(key)?))
+            .collect()
+    }
+
+    /// Get all keys in the map in arbitrary order using a given [read
+    /// consistency guarantee](ReadConsistency).
+    pub async fn keys_with(&self, consistency: ReadConsistency) -> Result<Vec<K>>
+    where
+        K: for<'a> Deserialize<'a>,
+    {
+        if should_read_stale(consistency, &self.cluster).await? {
+            self.keys_stale().await
+        } else {
+            self.client_to_leader()
+                .await?
+                .keys(&self.name, consistency)
+                .await?
+                .iter()
+                .map(|key| Ok(postcard::from_bytes(key)?))
+                .collect()
+        }
+    }
+
+    /// Get all keys in the map in arbitrary order using strong consistency.
+    ///
+    /// This is similar to calling [`keys_with`](Self::keys_with) using
+    /// [`ReadConsistency::ReadIndex`].
+    pub async fn keys(&self) -> Result<Vec<K>>
+    where
+        K: for<'a> Deserialize<'a>,
+    {
+        self.keys_with(ReadConsistency::ReadIndex).await
+    }
+
     /// Insert a key-value pair into the map.
     ///
     /// If the key already existed in the map, this method returns the old
@@ -341,6 +392,34 @@ mod tests {
 
         cluster.shutdown().await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn keys() -> Result<()> {
+        let cluster = single_node_cluster().await?;
+
+        {
+            let map: DMap<String, u64> = cluster.get_map("my_map");
+            assert!(map.keys().await?.is_empty());
+            assert!(map.keys_stale().await?.is_empty());
+
+            map.insert("alpha".to_string(), 1).await?;
+            map.insert("beta".to_string(), 2).await?;
+            map.insert("alpha".to_string(), 3).await?;
+
+            let mut keys = map.keys().await?;
+            keys.sort();
+            assert_eq!(keys, ["alpha", "beta"]);
+
+            assert_eq!(map.remove("alpha").await?, Some(3));
+            assert_eq!(map.keys().await?, ["beta"]);
+            assert_eq!(map.remove("beta").await?, Some(2));
+            assert!(map.keys().await?.is_empty());
+            assert!(map.keys_stale().await?.is_empty());
+        }
+
+        cluster.shutdown().await?;
         Ok(())
     }
 
