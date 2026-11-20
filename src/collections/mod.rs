@@ -11,11 +11,13 @@
 //! ```
 mod dmap;
 mod dmultimap;
+mod dset;
 
 use std::sync::Arc;
 
 pub use dmap::DMap;
 pub use dmultimap::DMultiMap;
+pub use dset::DSet;
 use openraft::{
     Raft,
     error::{CheckIsLeaderError, RaftError},
