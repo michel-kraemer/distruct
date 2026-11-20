@@ -27,7 +27,7 @@ use tokio::{
 };
 
 use crate::{
-    collections::{DMap, DMultiMap, DSet, ReadConsistency},
+    collections::{DMap, DMultiMap, ReadConsistency},
     connection::{
         cache::ConnectionCache,
         client::Client,
@@ -352,18 +352,6 @@ impl Cluster {
         V: Serialize + for<'a> Deserialize<'a>,
     {
         DMultiMap::new(name, Arc::clone(&self.inner))
-    }
-
-    /// Gets or creates a distributed set with the given `name`.
-    ///
-    /// Sets use the same namespace as distributed maps. Use a distinct name
-    /// for each set unless sharing its backing map is intentional.
-    pub fn get_set<K, N>(&self, name: N) -> DSet<K>
-    where
-        N: Into<String>,
-        K: Serialize,
-    {
-        DSet::new(name, Arc::clone(&self.inner))
     }
 
     /// Gets the IP address and port the cluster node is bound to.
