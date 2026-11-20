@@ -634,8 +634,11 @@ async fn handle_message(
         }
 
         RequestBody::Remove { map, key } => {
-            let value = state_machine.remove(&map, &key).await;
-            Ok(Response::Remove(value))
+            let cr = RaftRequest::Remove { map, key };
+            raft.client_write(cr)
+                .await
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
         }
 
         RequestBody::RemoveMulti {
@@ -643,11 +646,15 @@ async fn handle_message(
             key,
             value,
         } => {
-            let removed = state_machine
-                .remove_multi_value(&multi_map, &key, &value)
+            let cr = RaftRequest::RemoveMulti {
+                multi_map,
+                key,
+                value,
+            };
+            raft.client_write(cr)
                 .await
-                .unwrap_or_default();
-            Ok(Response::RemoveMulti(removed))
+                .map(Response::ClientWrite)
+                .map_err(|e| e.into())
         }
 
         RequestBody::Len { map, consistency } => {

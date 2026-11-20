@@ -76,9 +76,6 @@ where
     }
 
     /// Remove `value`, returning `true` if it was present.
-    ///
-    /// Like [`DMap::remove`], this currently removes the value only from the
-    /// leader's local state; the removal is not replicated to other nodes.
     pub async fn remove<Q>(&self, value: &Q) -> Result<bool>
     where
         K: Borrow<Q>,

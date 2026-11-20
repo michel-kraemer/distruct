@@ -329,7 +329,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use anyhow::Result;
+    use tokio::time::{sleep, timeout};
 
     use crate::{
         cluster::tests::{single_node_cluster, two_nodes_cluster},
@@ -464,7 +467,23 @@ mod tests {
             assert_eq!(map2.insert("counter".to_string(), 5678).await?, Some(1234));
             assert_eq!(map1.get("counter").await?, Some(5678));
 
+            assert!(!map2.cluster.is_leader().await);
+            timeout(Duration::from_secs(5), async {
+                while map2.get_stale("counter").await? != Some(5678) {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok::<_, crate::error::Error>(())
+            })
+            .await??;
+
             assert_eq!(map2.remove("counter").await?, Some(5678));
+            timeout(Duration::from_secs(5), async {
+                while map2.contains_key_stale("counter").await? {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok::<_, crate::error::Error>(())
+            })
+            .await??;
             assert!(map1.get("counter").await?.is_none());
             assert!(map2.get("counter").await?.is_none());
             assert!(map1.is_empty().await?);

@@ -93,25 +93,6 @@ impl StateMachine {
         .ok()
     }
 
-    pub(crate) async fn remove(&self, map: &str, key: &[u8]) -> Option<Vec<u8>> {
-        let mut sm = self.state_machine.write().await;
-        sm.data.maps.get_mut(map).and_then(|m| m.remove(key))
-    }
-
-    pub(crate) async fn remove_multi_value(
-        &self,
-        multi_map: &str,
-        key: &[u8],
-        value: &[u8],
-    ) -> Option<bool> {
-        let mut sm = self.state_machine.write().await;
-        sm.data
-            .multi_maps
-            .get_mut(multi_map)
-            .and_then(|mm| mm.get_mut(key))
-            .map(|m| m.remove(value))
-    }
-
     pub(crate) async fn map_len(&self, map: &str) -> Option<usize> {
         self.state_machine
             .read()
@@ -166,10 +147,29 @@ impl RaftStateMachine<TypeConfig> for Arc<StateMachine> {
                         res.push(RaftResponse::InsertMulti { inserted });
                     }
 
+                    RaftRequest::Remove { map, key } => {
+                        let value = sm.data.maps.get_mut(&map).and_then(|m| m.remove(&key));
+                        res.push(RaftResponse::Remove { value });
+                    }
+
                     RaftRequest::Clear { map } => {
                         let m = sm.data.maps.entry(map).or_default();
                         m.clear();
                         res.push(RaftResponse::Clear);
+                    }
+
+                    RaftRequest::RemoveMulti {
+                        multi_map,
+                        key,
+                        value,
+                    } => {
+                        let removed = sm
+                            .data
+                            .multi_maps
+                            .get_mut(&multi_map)
+                            .and_then(|m| m.get_mut(&key))
+                            .is_some_and(|values| values.remove(&value));
+                        res.push(RaftResponse::RemoveMulti { removed });
                     }
                 },
 

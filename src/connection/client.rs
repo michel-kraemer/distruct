@@ -278,7 +278,10 @@ impl Client {
             })
             .await?;
         match resp {
-            Response::Remove(response) => Ok(response),
+            Response::ClientWrite(ClientWriteResponse {
+                data: RaftResponse::Remove { value },
+                ..
+            }) => Ok(value),
             _ => Err(ProtocolError::UnknownResponse)?,
         }
     }
@@ -296,7 +299,10 @@ impl Client {
             })
             .await?;
         match resp {
-            Response::RemoveMulti(response) => Ok(response),
+            Response::ClientWrite(ClientWriteResponse {
+                data: RaftResponse::RemoveMulti { removed },
+                ..
+            }) => Ok(removed),
             _ => Err(ProtocolError::UnknownResponse)?,
         }
     }

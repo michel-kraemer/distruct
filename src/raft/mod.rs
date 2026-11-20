@@ -23,6 +23,15 @@ pub(crate) enum RaftRequest {
         key: Vec<u8>,
         value: Vec<u8>,
     },
+    Remove {
+        map: String,
+        key: Vec<u8>,
+    },
+    RemoveMulti {
+        multi_map: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
     Clear {
         map: String,
     },
@@ -32,6 +41,8 @@ pub(crate) enum RaftRequest {
 pub(crate) enum RaftResponse {
     Insert { value: Option<Vec<u8>> },
     InsertMulti { inserted: bool },
+    Remove { value: Option<Vec<u8>> },
+    RemoveMulti { removed: bool },
     Clear,
     Noop,
 }

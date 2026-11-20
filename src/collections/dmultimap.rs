@@ -171,7 +171,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use anyhow::Result;
+    use tokio::time::{sleep, timeout};
 
     use crate::{
         cluster::tests::{single_node_cluster, two_nodes_cluster},
@@ -289,9 +292,32 @@ mod tests {
             assert_eq!(sorted(map2.get("counter").await?), vec![1234, 5678]);
             assert!(!map1.insert("counter".to_string(), 5678).await?);
 
+            assert!(!map2.cluster.is_leader().await);
+            timeout(Duration::from_secs(5), async {
+                while sorted(map2.get_stale("counter").await?) != vec![1234, 5678] {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok::<_, crate::error::Error>(())
+            })
+            .await??;
+
             assert!(map2.remove("counter", &1234).await?);
+            timeout(Duration::from_secs(5), async {
+                while map2.get_stale("counter").await? != vec![5678] {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok::<_, crate::error::Error>(())
+            })
+            .await??;
             assert_eq!(map1.get("counter").await?, vec![5678]);
             assert!(map1.remove("counter", &5678).await?);
+            timeout(Duration::from_secs(5), async {
+                while !map2.get_stale("counter").await?.is_empty() {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok::<_, crate::error::Error>(())
+            })
+            .await??;
             assert!(map1.get("counter").await?.is_empty());
             assert!(map2.get("counter").await?.is_empty());
         }
